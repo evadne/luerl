@@ -61,6 +61,9 @@ interpreter with state as the first argument for better pipe operator usage.
 %% Storing and retrieving private data
 -export([put_private/3,get_private/2,delete_private/2]).
 
+%% Instruction fuel metering
+-export([set_fuel/2,get_fuel/1]).
+
 ?DOC( #{equiv => luerl:init()} ).
 
 init() ->
@@ -289,3 +292,28 @@ delete_private(St, K) ->
         error:{badkey, _} ->
             St
     end.
+
+%% Instruction fuel metering.
+
+?DOC( """
+Set instruction fuel limit. `infinity` means unlimited (default).
+A non-negative integer sets a hard limit on instructions executed.
+""").
+
+-spec set_fuel(LuaState, Fuel) -> LuaState when
+      Fuel :: non_neg_integer() | infinity,
+      LuaState :: luerlstate().
+
+set_fuel(St, Fuel) ->
+    luerl:set_fuel(Fuel, St).
+
+?DOC( """
+Get remaining instruction fuel. Returns `infinity` if unlimited.
+""").
+
+-spec get_fuel(LuaState) -> Fuel when
+      Fuel :: non_neg_integer() | infinity,
+      LuaState :: luerlstate().
+
+get_fuel(St) ->
+    luerl:get_fuel(St).
