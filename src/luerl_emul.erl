@@ -345,8 +345,16 @@ emul(Is, St) ->
 %% emul(Is, Cont, Lvs, Stk, Env, Cs, St) ->
 %%     emul_1(Is, Cont, Lvs, Stk, Env, Cs, St).
 
+%% Fuel check: when fuel reaches 0 we signal an error. The atom
+%% 'infinity' means unlimited and adds no overhead (single atom
+%% comparison, no record copy). When fuel is a positive integer we
+%% decrement per instruction dispatch.
+
+emul(_Is, _Cont, _Lvs, Stk, _Env, Cs, #luerl{fuel=0}=St) ->
+    lua_error(out_of_fuel, St#luerl{stk=Stk,cs=Cs});
+
 %% The tracing versions.
-emul([I|_]=Is, Cont, Lvs, Stk, Env, Cs, St) ->
+emul([I|_]=Is, Cont, Lvs, Stk, Env, Cs, #luerl{fuel=Fuel}=St) ->
     ?ITRACE_DO(begin
 		   io:fwrite("Is:  ~p\n", [Is]),
 		   io:fwrite("Cnt: ~p\n", [Cont]),
@@ -357,8 +365,12 @@ emul([I|_]=Is, Cont, Lvs, Stk, Env, Cs, St) ->
 		   io:fwrite("I: ~p\n", [I]),
 		   io:put_chars("--------\n")
 	       end),
-    emul_1(Is, Cont, Lvs, Stk, Env, Cs, St);
-emul([], Cont, Lvs, Stk, Env, Cs, St) ->
+    St1 = case Fuel of
+	      infinity -> St;
+	      N -> St#luerl{fuel=N-1}
+	  end,
+    emul_1(Is, Cont, Lvs, Stk, Env, Cs, St1);
+emul([], Cont, Lvs, Stk, Env, Cs, #luerl{fuel=Fuel}=St) ->
     ?ITRACE_DO(begin
 		   io:fwrite("Is:  ~p\n", [[]]),
 		   io:fwrite("Cnt: ~p\n", [Cont]),
@@ -368,7 +380,11 @@ emul([], Cont, Lvs, Stk, Env, Cs, St) ->
 		   io:fwrite("Cs:  ~p\n", [Cs]),
 		   io:put_chars("--------\n")
 	       end),
-    emul_1([], Cont, Lvs, Stk, Env, Cs, St).
+    St1 = case Fuel of
+	      infinity -> St;
+	      N -> St#luerl{fuel=N-1}
+	  end,
+    emul_1([], Cont, Lvs, Stk, Env, Cs, St1).
 
 %% itrace_print(Format, Args) ->
 %%     ?ITRACE_DO(io:fwrite(Format, Args)).

@@ -398,6 +398,9 @@ pcall(_, [F|As], St0) ->
         {Rs,St1} = luerl_emul:functioncall(F, As, St0),
         {[true|Rs],St1}
     catch
+        %% Fuel exhaustion is a hard limit, not catchable by Lua code.
+        error:{lua_error,out_of_fuel,_}=FuelErr ->
+            error(FuelErr);
         %% Only catch Lua errors here, signal system errors.
         error:{lua_error,{error_call, Eas},St2} ->
             Msg = case Eas of
