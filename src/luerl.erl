@@ -72,6 +72,9 @@ or
 %% Storing and retrieving private data
 -export([put_private/3,get_private/2,delete_private/2]).
 
+%% Instruction fuel metering
+-export([set_fuel/2,get_fuel/1]).
+
 ?DOC( """
 Create a new Lua state which is a fresh Lua VM instance.
 """).
@@ -1034,3 +1037,29 @@ Delete the private value for `Key`.
 delete_private(Key, St) ->
     Private = maps:remove(Key, St#luerl.private),
     St#luerl{private=Private}.
+
+%% Instruction fuel metering.
+%%
+%% Fuel limits the number of instructions the emulator will execute.
+%% The atom 'infinity' (the default) means unlimited. A non-negative
+%% integer sets a hard limit: when the counter reaches 0 the emulator
+%% raises {lua_error, out_of_fuel, State}.
+%%
+%% set_fuel(Fuel, State) -> State.
+%% get_fuel(State) -> Fuel.
+
+-spec set_fuel(Fuel, LuaState) -> LuaState when
+      Fuel :: non_neg_integer() | infinity,
+      LuaState :: luerlstate().
+
+set_fuel(Fuel, St) when is_integer(Fuel), Fuel >= 0 ->
+    St#luerl{fuel=Fuel};
+set_fuel(infinity, St) ->
+    St#luerl{fuel=infinity}.
+
+-spec get_fuel(LuaState) -> Fuel when
+      Fuel :: non_neg_integer() | infinity,
+      LuaState :: luerlstate().
+
+get_fuel(St) ->
+    St#luerl.fuel.

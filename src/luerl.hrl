@@ -35,6 +35,7 @@
                 tag,                            %Unique tag
                 trace_func=none,                %Trace function
                 trace_data,                     %Trace data
+                fuel=infinity,                  %Instruction fuel counter
                 private=#{}
                }).
 
