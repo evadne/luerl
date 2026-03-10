@@ -273,7 +273,18 @@ select_back(N, As, Len) when N =< Len ->
 select_back(_, As, _) -> As.
 
 tonumber(_, [Arg], St) -> {[tonumber(luerl_lib:arg_to_number(Arg))],St};
-tonumber(_, [Arg,B|_], St) -> {[tonumber(luerl_lib:arg_to_number(Arg, B))],St};
+tonumber(_, [Arg,B|_], St) ->
+    %% Lua 5.3: base must be integer in 2..36, else "base out of range".
+    case luerl_lib:arg_to_number(B) of
+	N when is_number(N) ->
+	    Base = trunc(N),
+	    if Base >= 2, Base =< 36 ->
+		    {[tonumber(luerl_lib:arg_to_number(Arg, B))],St};
+	       true ->
+		    badarg_error(tonumber, [Arg,B], St)
+	    end;
+	_ -> badarg_error(tonumber, [Arg,B], St)
+    end;
 tonumber(_, As, St) -> badarg_error(tonumber, As, St).
 
 tonumber(Num) when is_number(Num) -> Num;
