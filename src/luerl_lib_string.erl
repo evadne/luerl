@@ -268,25 +268,36 @@ do_gsub(S, L, Pat0, R, N, St0) ->
 	{error,E} -> throw({error,E})
     end.
 
-%% gsub_match_loop(S, L, Pat, I, C, N) -> [Cas].
+%% gsub_match_loop(S, L, Pat, I, C, N, Orig) -> [Cas].
 %%  Return the list of Cas's for each match.
+%%  Implements Lua 5.3.3 empty match semantics: after a match ending
+%%  at position E, a subsequent match at the same position E is
+%%  rejected (the character is skipped without matching).
 
-gsub_match_loop(_, _, _, _, C, N, _Orig) when C > N -> [];
-gsub_match_loop(<<>>, _, Pat, I, _, _, Orig) -> %It can still match at end!
+gsub_match_loop(S, L, Pat, I, C, N, Orig) ->
+    gsub_match_loop(S, L, Pat, I, C, N, Orig, none).
+
+gsub_match_loop(_, _, _, _, C, N, _Orig, _LastMatch) when C > N -> [];
+gsub_match_loop(<<>>, _, Pat, I, _, _, Orig, LastMatch) ->
     case match_pat(<<>>, Pat, I, Orig) of
+	{match,_Cas,_,I} when I =:= LastMatch -> [];  %Reject: same as last
 	{match,Cas,_,_} -> [Cas];
 	nomatch -> []
     end;
-gsub_match_loop(S0, L, Pat, I0, C, N, Orig) ->
+gsub_match_loop(S0, L, Pat, I0, C, N, Orig, LastMatch) ->
     case match_pat(S0, Pat, I0, Orig) of
+	{match,_Cas,_,I0} when I0 =:= LastMatch ->
+	    %% Match at same position as last match end: reject, skip char.
+	    S1 = binary_part(S0, 1, L-I0),
+	    gsub_match_loop(S1, L, Pat, I0+1, C, N, Orig, LastMatch);
 	{match,Cas,_,I0} ->			%Zero length match
 	    S1 = binary_part(S0, 1, L-I0),
-	    [Cas|gsub_match_loop(S1, L, Pat, I0+1, C+1, N, Orig)];
+	    [Cas|gsub_match_loop(S1, L, Pat, I0+1, C+1, N, Orig, I0)];
 	{match,Cas,S1,I1} ->
-	    [Cas|gsub_match_loop(S1, L, Pat, I1, C+1, N, Orig)];
+	    [Cas|gsub_match_loop(S1, L, Pat, I1, C+1, N, Orig, I1)];
 	nomatch ->
 	    S1 = binary_part(S0, 1, L-I0),
-	    gsub_match_loop(S1, L, Pat, I0+1, C, N, Orig)
+	    gsub_match_loop(S1, L, Pat, I0+1, C, N, Orig, LastMatch)
     end.
 
 %% gsub_repl_loop([Cas], String, Index, Length, Reply, State) ->
