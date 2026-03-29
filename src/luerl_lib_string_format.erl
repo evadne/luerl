@@ -344,7 +344,7 @@ format_s(Fl, Fw, P, A, St0) ->
     %% Lua wants this.
     Fargs = (Fl =/= ?FL_NONE) orelse (Fw =/= none) orelse (P =/= none),
     case Fargs andalso binary:match(S0, <<0>>) =/= nomatch of
-        true -> badarg_error(format, ['s',A], St1);
+        true -> throw({error,{contains_zeros,format}});
         false -> false
     end,
     S1 = trim_bin(S0, P),
@@ -407,8 +407,8 @@ format_q(I, _St) when is_float(I) ->
 format_q(nil, _St) -> <<"nil">>;
 format_q(true, _St) -> <<"true">>;
 format_q(false, _St) -> <<"false">>;
-format_q(Arg, St) ->
-    badarg_error(format, ['q',Arg], St).
+format_q(_Arg, _St) ->
+    throw({error,{no_literal,format}}).
 
 %% format_q_string(String) -> String.
 %%  Build the quoted string.

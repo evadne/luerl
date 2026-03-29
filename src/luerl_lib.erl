@@ -95,12 +95,28 @@ format_error({illegal_return_value,Func}) ->
 format_error(invalid_pattern) ->                %Keep text!
     <<"malformed pattern">>;
 format_error(invalid_capture) ->                %Keep text!
-    <<"malformed pattern">>;
+    <<"invalid pattern capture">>;
+format_error(unfinished_capture) ->
+    <<"malformed pattern (unfinished capture)">>;
 format_error({invalid_char_class,C}) ->         %Keep text!
     Msg = io_lib:format("malformed pattern (class ~c)", [C]),
     unicode:characters_to_binary(Msg);
 format_error(invalid_char_set) ->               %Keep text!
     <<"malformed pattern (missing ']')">>;
+format_error(missing_frontier_set) ->
+    <<"missing '[' after '%%f' in pattern">>;
+%% Replacement errors.
+format_error({invalid_repl_value,Type}) ->
+    Msg = io_lib:format("invalid replacement value (a ~s)", [Type]),
+    unicode:characters_to_binary(Msg);
+format_error({invalid_percent_in_repl,_C}) ->
+    <<"invalid use of '%' in replacement string">>;
+format_error({no_literal,_Where}) ->
+    <<"no literal">>;
+format_error({contains_zeros,_Where}) ->
+    <<"value contains zeros">>;
+format_error({invalid_capture_index,N}) ->
+    iolist_to_binary(["invalid capture index %", integer_to_list(N)]);
 %% Illegal or undefined ops.
 format_error({illegal_op,Op}) ->
     format_error("illegal op: ~ts", [Op]);

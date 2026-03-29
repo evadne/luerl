@@ -352,18 +352,25 @@ gsub_repl_str(Cas, S, [$%,C|R]) when C >= $1, C =< $9 ->
 		{1, [{0,_,_}=Ca]} ->
 		    Cstr = luerl_lib:arg_to_string(match_cap(Ca, S)),
 		    [Cstr|gsub_repl_str(Cas, S, R)];
-		_ -> throw({error,{illegal_index,capture,C-$0}})
+		_ -> throw({error,{invalid_capture_index,C-$0}})
 	    end
     end;
+gsub_repl_str(_Cas, _S, [$%,C|_R]) ->
+    %% Lua 5.3: only %%, %0-%9 are valid in replacement strings.
+    throw({error,{invalid_percent_in_repl,C}});
 gsub_repl_str(Cas, S, [C|R]) ->
     [C|gsub_repl_str(Cas, S, R)];
 gsub_repl_str(_, _, []) -> [].
 
 %% Return string or original match.
 
-gsub_repl_val(S, Val, Ca) ->
+gsub_repl_val(S, nil, Ca) -> match_cap(Ca, S);
+gsub_repl_val(S, false, Ca) -> match_cap(Ca, S);
+gsub_repl_val(_S, Val, _Ca) ->
     case luerl_lib:arg_to_string(Val) of
-	error -> match_cap(Ca, S);		%Use original match
+	error ->
+	    %% Lua 5.3: non-string/number/boolean replacement is an error.
+	    throw({error,{invalid_repl_value,luerl_lib_basic:type(Val)}});
 	Str -> Str
     end.
 
@@ -573,7 +580,8 @@ single([$.|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, ['.'|P]);
 single([$%|Cs], Sd, Sn, P) -> char_class(Cs, Sd, Sn, P);
 single([$$], Sd, Sn, P) -> {lists:reverse(P, ['\$']),Sd,Sn};
 single([C|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, [C|P]);
-single([], Sd, Sn, P) -> {lists:reverse(P),Sd,Sn}.
+single([], 0, Sn, P) -> {lists:reverse(P),0,Sn};
+single([], _Sd, _Sn, _P) -> throw({error,unfinished_capture}).
 
 singlep([$*|Cs], Sd, Sn, [Char|P]) -> single(Cs, Sd, Sn, [{kclosure,Char}|P]);
 singlep([$+|Cs], Sd, Sn, [Char|P]) -> single(Cs, Sd, Sn, [{pclosure,Char}|P]);
@@ -611,8 +619,10 @@ char_class([$f,$[|Cs0], Sd, Sn, P) ->		%Frontier pattern
         {Set, [$]|Cs2]} -> single(Cs2, Sd, Sn, [{frontier,SetType,Set}|P]);
         _ -> throw({error,invalid_char_set})
     end;
-char_class([$f|_], _, _, _) -> throw({error,invalid_pattern});
+char_class([$f|_], _, _, _) -> throw({error,missing_frontier_set});
 char_class([$b,L,R|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, [{balance,L,R}|P]);
+char_class([$0|_Cs], _Sd, _Sn, _P) ->          %Capture ref %0 invalid in patterns
+    throw({error,{invalid_capture_index,0}});
 char_class([C|Cs], Sd, Sn, P) when C >= $1, C =< $9 ->  %Backreference
     singlep(Cs, Sd, Sn, [{capture_ref,C - $0}|P]);
 char_class([C|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, [char_class(C)|P]);
@@ -709,7 +719,9 @@ match_pat([{capture_ref,N}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
 		    {nomatch,Ps0,Cs,I,Ca,Cas}
 	    end;
 	_ ->
-	    {nomatch,Ps0,Cs,I,Ca,Cas}
+	    %% Capture N not found or incomplete.
+	    %% Lua 5.3: error if capture is open/unfinished.
+	    throw({error,{invalid_capture_index,N}})
     end;
 match_pat([{frontier,SetType,Set}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
     {OrigBin, BaseOff} = Orig,
