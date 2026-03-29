@@ -226,13 +226,13 @@ args_to_lists(As, Acc) ->
 %% arg_to_number(Arg, Base) -> Number | error.
 %% args_to_numbers(Args) -> Numbers | 'error'.
 %% args_to_numbers(Arg, Arg) -> Numbers | 'error'.
-%%  Strings always result in floats.
+%%  Strings result in integers or floats depending on the string content.
 %%  Arg_to_number/2 only generates "integers". Lua does it like that.
 
 arg_to_number(N) when is_number(N) -> N;
 arg_to_number(B) when is_binary(B) ->
     case bin_to_number(B) of
-	{ok,N} -> float(N);
+	{ok,N} -> N;
 	error -> error
     end;
 arg_to_number(_) -> error.
