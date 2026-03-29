@@ -437,6 +437,11 @@ string_bq_chars_utf8(_Cs, _Uchar, _Acc) ->
     throw({string_error,"missing '}'"}).
 
 skip_space([$\s|Cs]) -> skip_space(Cs);
+skip_space([$\t|Cs]) -> skip_space(Cs);
+skip_space([$\n|Cs]) -> skip_space(Cs);
+skip_space([$\r|Cs]) -> skip_space(Cs);
+skip_space([$\f|Cs]) -> skip_space(Cs);
+skip_space([$\v|Cs]) -> skip_space(Cs);
 skip_space(Cs) -> Cs.
 
 %% long_string_token(InputChars, Length, BracketLength, Line) ->

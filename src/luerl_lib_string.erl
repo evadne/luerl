@@ -157,7 +157,7 @@ do_find(S, L, Pat0, I, false) ->		%Pattern search string
 	{ok,{Pat1,_},_} ->
 	    L1 = L - I + 1,			%Length of substring
 	    S1 = binary_part(S, I-1, L1),	%Start searching from I
-	    case match_loop(S1, L1, Pat1, 1) of
+	    case match_loop(S1, L1, Pat1, 1, {S, I-1}) of
 		[{_,P,Len}|Cas] ->		%Matches
 		    P1 = P + I - 1,		%Position in original string
 		    [P1,P1+Len-1|match_caps(Cas, S, I)];
@@ -205,7 +205,7 @@ do_gmatch(S, P, St0) ->
     case pat(binary_to_list(P)) of
 	{ok,{Pat,_},_} ->
 	    L = byte_size(S),
-	    Matches = gsub_match_loop(S, L, Pat, 1, 1, all),
+	    Matches = gsub_match_loop(S, L, Pat, 1, 1, all, {S, 0}),
 	    %% Store the match state in private data.
 	    Ref = make_ref(),
 	    St1 = luerl:put_private(Ref, {Matches, S}, St0),
@@ -257,12 +257,12 @@ do_gsub(As, St) ->
 
 test_gsub(S, P, N) ->
     {ok,{Pat,_},_} = pat(binary_to_list(P)),
-    gsub_match_loop(S, byte_size(S), Pat, 1, 1, N).
+    gsub_match_loop(S, byte_size(S), Pat, 1, 1, N, {S, 0}).
 
 do_gsub(S, L, Pat0, R, N, St0) ->
     case pat(binary_to_list(Pat0)) of
 	{ok,{Pat1,_},_} ->
-	    Fs = gsub_match_loop(S, L, Pat1, 1, 1, N),
+	    Fs = gsub_match_loop(S, L, Pat1, 1, 1, N, {S, 0}),
 	    {Ps,St1} = gsub_repl_loop(Fs, S, 1, L, R, St0),
 	    {[iolist_to_binary(Ps),length(Fs)],St1};
 	{error,E} -> throw({error,E})
@@ -271,22 +271,22 @@ do_gsub(S, L, Pat0, R, N, St0) ->
 %% gsub_match_loop(S, L, Pat, I, C, N) -> [Cas].
 %%  Return the list of Cas's for each match.
 
-gsub_match_loop(_, _, _, _, C, N) when C > N -> [];
-gsub_match_loop(<<>>, _, Pat, I, _, _) ->	%It can still match at end!
-    case match_pat(<<>>, Pat, I) of
+gsub_match_loop(_, _, _, _, C, N, _Orig) when C > N -> [];
+gsub_match_loop(<<>>, _, Pat, I, _, _, Orig) -> %It can still match at end!
+    case match_pat(<<>>, Pat, I, Orig) of
 	{match,Cas,_,_} -> [Cas];
 	nomatch -> []
     end;
-gsub_match_loop(S0, L, Pat, I0, C, N) ->
-    case match_pat(S0, Pat, I0) of
+gsub_match_loop(S0, L, Pat, I0, C, N, Orig) ->
+    case match_pat(S0, Pat, I0, Orig) of
 	{match,Cas,_,I0} ->			%Zero length match
 	    S1 = binary_part(S0, 1, L-I0),
-	    [Cas|gsub_match_loop(S1, L, Pat, I0+1, C+1, N)];
+	    [Cas|gsub_match_loop(S1, L, Pat, I0+1, C+1, N, Orig)];
 	{match,Cas,S1,I1} ->
-	    [Cas|gsub_match_loop(S1, L, Pat, I1, C+1, N)];
+	    [Cas|gsub_match_loop(S1, L, Pat, I1, C+1, N, Orig)];
 	nomatch ->
 	    S1 = binary_part(S0, 1, L-I0),
-	    gsub_match_loop(S1, L, Pat, I0+1, C, N)
+	    gsub_match_loop(S1, L, Pat, I0+1, C, N, Orig)
     end.
 
 %% gsub_repl_loop([Cas], String, Index, Length, Reply, State) ->
@@ -391,7 +391,7 @@ do_match(S, L, Pat0, I) ->
 	{ok,{Pat1,_},_} ->
 	    L1 = L - I + 1,			%Length of substring
 	    S1 = binary_part(S, I-1, L1),	%Start searching from I
-	    case match_loop(S1, L1, Pat1, 1) of
+	    case match_loop(S1, L1, Pat1, 1, {S, I-1}) of
 		[{_,P,Len}] ->			%Only top level match
 		    P1 = P + I - 1,		%Position in original string
 		    [binary_part(S, P1-1, Len)];
@@ -405,17 +405,17 @@ do_match(S, L, Pat0, I) ->
 %% match_loop(String, Length, Pattern, Index) -> Cas | [].
 %% Step down the string trying to find a match.
 
-match_loop(S, L, Pat, I) when I > L ->		%It can still match at end!
-    case match_pat(S, Pat, I) of
+match_loop(S, L, Pat, I, Orig) when I > L ->	%It can still match at end!
+    case match_pat(S, Pat, I, Orig) of
 	{match,Cas,_,_} -> Cas;
 	nomatch -> []				%Now we haven't found it
     end;
-match_loop(S0, L, Pat, I) ->
-    case match_pat(S0, Pat, I) of
+match_loop(S0, L, Pat, I, Orig) ->
+    case match_pat(S0, Pat, I, Orig) of
 	{match,Cas,_,_} -> Cas;
 	nomatch ->
 	    S1 = binary_part(S0, 1, L-I),
-	    match_loop(S1, L, Pat, I+1)
+	    match_loop(S1, L, Pat, I+1, Orig)
     end.
 
 %% match_cap(Capture, String [, Init]) -> Capture.
@@ -582,10 +582,19 @@ char_set([C|Cs], Set) ->
     char_set(Cs, [C|Set]);
 char_set([], Set) -> {Set,[]}.			%We are at the end
 
-%% char_class([$f,$[|Cs], Sd, Sn, P) ->
-%%     char_set(Cs, Sd, Sn, [frontier|P]);
+char_class([$f,$[|Cs0], Sd, Sn, P) ->		%Frontier pattern
+    {SetType, Cs1} = case Cs0 of
+        [$^|Rest] -> {comp_set, Rest};
+        Rest -> {char_set, Rest}
+    end,
+    case char_set(Cs1) of
+        {Set, [$]|Cs2]} -> single(Cs2, Sd, Sn, [{frontier,SetType,Set}|P]);
+        _ -> throw({error,invalid_char_set})
+    end;
 char_class([$f|_], _, _, _) -> throw({error,invalid_pattern});
 char_class([$b,L,R|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, [{balance,L,R}|P]);
+char_class([C|Cs], Sd, Sn, P) when C >= $1, C =< $9 ->  %Backreference
+    singlep(Cs, Sd, Sn, [{capture_ref,C - $0}|P]);
 char_class([C|Cs], Sd, Sn, P) -> singlep(Cs, Sd, Sn, [char_class(C)|P]);
 char_class([], _, _, _) -> throw({error,invalid_pattern}).
 
@@ -620,81 +629,111 @@ char_class(C) ->				%Only non-alphanum allowed
 test_match_pat(S, P, I) ->
     {ok,{Pat,_},_} = pat(P),
     io:fwrite("tdm: ~p\n", [{Pat}]),
-    match_pat(S, Pat, I).
+    match_pat(S, Pat, I, {S, 0}).
 
 %% match_pat(String, Pattern, Index) -> {match,[Capture],Rest,Index} | nomatch.
 %%  Try and match the pattern with the string *at the current
 %%  position*. No searching.
 
-match_pat(S0, P0, I0) ->
-    case match_pat(P0, S0, I0, [{0,I0}], []) of
+match_pat(S0, P0, I0, Orig) ->
+    case match_pat(P0, S0, I0, [{0,I0}], [], Orig) of
 	{match,S1,I1,_,Cas} ->{match,Cas,S1,I1};
 	{nomatch,_,_,_,_,_} -> nomatch
     end.
 
-match_pat(['\$']=Ps, Cs, I, Ca, Cas) ->		%Match only end of string
+match_pat(['\$']=Ps, Cs, I, Ca, Cas, Orig) ->	%Match only end of string
     case Cs of
-	<<>> -> match_pat([], <<>>, I, Ca, Cas);
+	<<>> -> match_pat([], <<>>, I, Ca, Cas, Orig);
 	_ -> {nomatch,Ps,Cs,I,Ca,Cas}
     end;
-match_pat(['^'|Ps]=Ps0, Cs, I, Ca, Cas) ->	%Match beginning of string
-    if I =:= 1 -> match_pat(Ps, Cs, 1, Ca, Cas);
+match_pat(['^'|Ps]=Ps0, Cs, I, Ca, Cas, Orig) -> %Match beginning of string
+    if I =:= 1 -> match_pat(Ps, Cs, 1, Ca, Cas, Orig);
        true -> {nomatch,Ps0,Cs,I,Cs,Cas}
     end;
-match_pat([{'(',Sn},')'|P], Cs, I, Ca, Cas) ->
-    match_pat(P, Cs, I, Ca, save_cap(Sn, I, -1, Cas));
-match_pat([{'(',Sn}|P], Cs, I, Ca, Cas) ->
-    match_pat(P, Cs, I, [{Sn,I}|Ca], Cas);
-match_pat([')'|P], Cs, I, [{Sn,S}|Ca], Cas) ->
-    match_pat(P, Cs, I, Ca, save_cap(Sn, S, I-S, Cas));
-match_pat([{kclosure,P}=K|Ps], Cs, I, Ca, Cas) ->
+match_pat([{'(',Sn},')'|P], Cs, I, Ca, Cas, Orig) ->
+    match_pat(P, Cs, I, Ca, save_cap(Sn, I, -1, Cas), Orig);
+match_pat([{'(',Sn}|P], Cs, I, Ca, Cas, Orig) ->
+    match_pat(P, Cs, I, [{Sn,I}|Ca], Cas, Orig);
+match_pat([')'|P], Cs, I, [{Sn,S}|Ca], Cas, Orig) ->
+    match_pat(P, Cs, I, Ca, save_cap(Sn, S, I-S, Cas), Orig);
+match_pat([{kclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig) ->
     %%io:fwrite("dm: ~p\n", [{[P,K|Ps],Cs,I,Ca,Cas}]),
-    case match_pat([P,K|Ps], Cs, I, Ca, Cas) of	%First try with it
+    case match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig) of	%First try with it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try without it
-	    match_pat(Ps, Cs, I, Ca, Cas)
+	    match_pat(Ps, Cs, I, Ca, Cas, Orig)
     end;
-match_pat([{pclosure,P}|Ps], Cs, I, Ca, Cas) ->	%The easy way
-    match_pat([P,{kclosure,P}|Ps], Cs, I, Ca, Cas);
-match_pat([{mclosure,P}=K|Ps], Cs, I, Ca, Cas) ->
-    case match_pat(Ps, Cs, I, Ca, Cas) of	%First try without it
+match_pat([{pclosure,P}|Ps], Cs, I, Ca, Cas, Orig) ->	%The easy way
+    match_pat([P,{kclosure,P}|Ps], Cs, I, Ca, Cas, Orig);
+match_pat([{mclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig) ->
+    case match_pat(Ps, Cs, I, Ca, Cas, Orig) of	%First try without it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try with it
-	    match_pat([P,K|Ps], Cs, I, Ca, Cas)
+	    match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig)
     end;
-match_pat([{optional,P}|Ps], Cs, I, Ca, Cas) ->
-    case match_pat([P|Ps], Cs, I, Ca, Cas) of	%First try with it
+match_pat([{optional,P}|Ps], Cs, I, Ca, Cas, Orig) ->
+    case match_pat([P|Ps], Cs, I, Ca, Cas, Orig) of	%First try with it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try without it
-	    match_pat(Ps, Cs, I, Ca, Cas)
+	    match_pat(Ps, Cs, I, Ca, Cas, Orig)
     end;
-match_pat([{char_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas) ->
+match_pat([{capture_ref,N}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
+    case lists:keyfind(N, 1, Cas) of
+	{N, P, Len} when Len >= 0 ->
+	    {OrigBin, BaseOff} = Orig,
+	    CapText = binary_part(OrigBin, P - 1 + BaseOff, Len),
+	    case Cs of
+		<<Prefix:Len/binary, Rest/binary>> when Prefix =:= CapText ->
+		    match_pat(Ps, Rest, I+Len, Ca, Cas, Orig);
+		_ ->
+		    {nomatch,Ps0,Cs,I,Ca,Cas}
+	    end;
+	_ ->
+	    {nomatch,Ps0,Cs,I,Ca,Cas}
+    end;
+match_pat([{frontier,SetType,Set}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
+    {OrigBin, BaseOff} = Orig,
+    AbsI = I + BaseOff,
+    PrevChar = if AbsI =:= 1 -> 0;		%NUL before start of string
+		  true -> binary:at(OrigBin, AbsI - 2)
+	       end,
+    CurrChar = case Cs of
+	<<C, _/binary>> -> C;
+	<<>> -> 0				%NUL after end of string
+    end,
+    PrevMatch = frontier_set_test(SetType, Set, PrevChar),
+    CurrMatch = frontier_set_test(SetType, Set, CurrChar),
+    case (not PrevMatch) andalso CurrMatch of
+	true -> match_pat(Ps, Cs, I, Ca, Cas, Orig);  %Zero-width assertion
+	false -> {nomatch,Ps0,Cs,I,Ca,Cas}
+    end;
+match_pat([{char_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) ->
     case match_char_set(Set, C) of
-	true -> match_pat(Ps, Cs, I+1, Ca, Cas);
+	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
 	false -> {nomatch,Ps0,Cs0,I,Ca,Cas}
     end;
-match_pat([{comp_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas) ->
+match_pat([{comp_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) ->
     case match_char_set(Set, C) of
 	true -> {nomatch,Ps0,Cs0,I,Ca,Cas};
-	false -> match_pat(Ps, Cs, I+1, Ca, Cas)
+	false -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig)
     end;
-match_pat([{balance,L,R}|Ps]=Ps0, <<L,Cs1/binary>>=Cs0, I0, Ca, Cas) ->
+match_pat([{balance,L,R}|Ps]=Ps0, <<L,Cs1/binary>>=Cs0, I0, Ca, Cas, Orig) ->
     case balance(Cs1, I0+1, L, R, 1) of
-	{ok,Cs2,I1} -> match_pat(Ps, Cs2, I1, Ca, Cas);
+	{ok,Cs2,I1} -> match_pat(Ps, Cs2, I1, Ca, Cas, Orig);
 	error -> {nomatch,Ps0,Cs0,I0,Ca,Cas}
     end;
-match_pat(['.'|Ps], <<_,Cs/binary>>, I, Ca, Cas) ->	%Matches anything
-    match_pat(Ps, Cs, I+1, Ca, Cas);
-match_pat([A|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas) when is_atom(A) ->
+match_pat(['.'|Ps], <<_,Cs/binary>>, I, Ca, Cas, Orig) -> %Matches anything
+    match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
+match_pat([A|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) when is_atom(A) ->
     case match_class(A, C) of
-	true -> match_pat(Ps, Cs, I+1, Ca, Cas);
+	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
 	false -> {nomatch,Ps0,Cs0,I,Ca,Cas}
     end;
-match_pat([C|Ps], <<C,Cs/binary>>, I, Ca, Cas) ->
-    match_pat(Ps, Cs, I+1, Ca, Cas);
-match_pat([], Cs, I, [{Sn,S}|Ca], Cas) ->
+match_pat([C|Ps], <<C,Cs/binary>>, I, Ca, Cas, Orig) ->
+    match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
+match_pat([], Cs, I, [{Sn,S}|Ca], Cas, _Orig) ->
     {match,Cs,I,Ca,[{Sn,S,I-S}|Cas]};
-match_pat(Ps, Cs, I, Ca, Cas) ->
+match_pat(Ps, Cs, I, Ca, Cas, _Orig) ->
     {nomatch,Ps,Cs,I,Ca,Cas}.
 
 %% save_cap(N, Position, Length, Captures) -> Captures.
@@ -735,6 +774,9 @@ match_class('x', C) -> is_x_char(C);
 match_class('X', C) -> not is_x_char(C);
 match_class('z', C) -> is_z_char(C);		%Deprecated
 match_class('Z', C) -> not is_z_char(C).
+
+frontier_set_test(char_set, Set, C) -> match_char_set(Set, C);
+frontier_set_test(comp_set, Set, C) -> not match_char_set(Set, C).
 
 match_char_set([{C1,C2}|_], C) when C >= C1, C=< C2 -> true;
 match_char_set([A|Set], C) when is_atom(A) ->
