@@ -235,13 +235,30 @@ format_integer(Fl, F, P, N, Prefix, Str0) ->
 %%  Print float Argument in e/f/g format.
 
 format_e_float(Fl, F, P, A) ->
-    format_float(Fl, F, e_float_precision(P), "~.*e", A).
+    Prec = e_float_precision(P),
+    case Prec < 2 of
+        true ->
+            %% Erlang's ~e requires precision >= 2. Format with 2, then
+            %% strip the extra decimal digit to match Lua's %.0e output.
+            Str = format_float_raw(Fl, F, 2, "~.*e", A),
+            strip_e_extra_digit(Str);
+        false ->
+            format_float(Fl, F, Prec, "~.*e", A)
+    end.
 
 format_f_float(Fl, F, P, A) ->
-    format_float(Fl, F, f_float_precision(P), "~.*f", A).
+    Prec = f_float_precision(P),
+    case Prec of
+        0 -> format_float_zero_f(Fl, F, A);
+        _ -> format_float(Fl, F, Prec, "~.*f", A)
+    end.
 
 format_g_float(Fl, F, P, A) ->
-    format_float(Fl, F, g_float_precision(P), "~.*g", A).
+    Prec = g_float_precision(P),
+    case Prec of
+        0 -> format_float(Fl, F, 1, "~.*g", A);
+        _ -> format_float(Fl, F, Prec, "~.*g", A)
+    end.
 
 %% format_float(Flag, Field, Precision, Format, Argument) -> String
 
@@ -258,6 +275,47 @@ format_float(Fl, F, P, Format, A) ->
        true ->
             Str1 = Sign ++ Str0,
             adjust_str(Str1, Fl, F)
+    end.
+
+%% format_float_zero_f(Flags, Field, Argument) -> String.
+%%  Handle %.0f by using float_to_list with 0 decimals, then applying
+%%  sign/padding. Avoids Erlang's io_lib:format which rejects precision 0.
+
+format_float_zero_f(Fl, F, A) ->
+    N = luerl_lib:arg_to_float(A),
+    Str0 = erlang:float_to_list(abs(N), [{decimals, 0}]),
+    Sign = sign(Fl, N),
+    if ?FLAG_SET(Fl, ?FL_M) ->
+            Str1 = Sign ++ Str0,
+            adjust_str(Str1, Fl, F);
+       ?FLAG_SET(Fl, ?FL_Z) andalso (F =/= none) ->
+            Str1 = adjust_str(Str0, ?FL_Z, F-length(Sign)),
+            Sign ++ Str1;
+       true ->
+            Str1 = Sign ++ Str0,
+            adjust_str(Str1, Fl, F)
+    end.
+
+%% format_float_raw(Flags, Field, Precision, Format, Argument) -> String.
+%%  Like format_float but returns the fully formatted string (with sign/padding).
+
+format_float_raw(Fl, F, P, Format, A) ->
+    format_float(Fl, F, P, Format, A).
+
+%% strip_e_extra_digit(String) -> String.
+%%  For %.0e: we formatted with precision 2 (e.g. "4.2e+01"),
+%%  need to strip the decimal point and one digit to get "4e+01".
+
+strip_e_extra_digit(Str) when is_list(Str) ->
+    strip_e_extra_digit_str(lists:flatten(Str));
+strip_e_extra_digit(Str) ->
+    strip_e_extra_digit_str(Str).
+
+strip_e_extra_digit_str(Str) ->
+    case re:run(Str, "^([ 0+-]*)([0-9]+)\\.([0-9])(e.*)$",
+                [{capture, [1,2,4], list}]) of
+        {match, [Prefix, Digit, Exp]} -> Prefix ++ Digit ++ Exp;
+        _ -> Str
     end.
 
 e_float_precision(none) -> 7;
