@@ -333,7 +333,15 @@ gsub_repl_str(Cas, S, [$%,C|R]) when C >= $1, C =< $9 ->
 	{value,Ca} ->
 	    Cstr = luerl_lib:arg_to_string(match_cap(Ca, S)), %Force to string!
 	    [Cstr|gsub_repl_str(Cas, S, R)];
-	false -> throw({error,{illegal_index,capture,C-$0}})
+	false ->
+	    %% Lua 5.3: when pattern has no explicit captures,
+	    %% the whole match is implicitly capture 1.
+	    case Cas of
+		[{0,_,_}=Ca] ->
+		    Cstr = luerl_lib:arg_to_string(match_cap(Ca, S)),
+		    [Cstr|gsub_repl_str(Cas, S, R)];
+		_ -> throw({error,{illegal_index,capture,C-$0}})
+	    end
     end;
 gsub_repl_str(Cas, S, [C|R]) ->
     [C|gsub_repl_str(Cas, S, R)];
