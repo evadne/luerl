@@ -440,8 +440,15 @@ rep(_, [A1,A2], St) -> rep(nil, [A1,A2,<<>>], St);
 rep(_, [_,_,_|_]=As, St) ->
     case luerl_lib:conv_list(As, [lua_string,lua_integer,lua_string]) of
         [S,I,Sep] ->
+            %% Check total size before allocating. Lua limits string size
+            %% to ~2^31 bytes; we use the same limit to avoid hanging on
+            %% enormous repetitions like string.rep("a", maxinteger).
+            MaxSize = 16#7FFFFFFE,              %2^31 - 2
+            TotalSize = I * (byte_size(S) + byte_size(Sep)),
             Part = [Sep,S],
-            if I > 100 ->
+            if TotalSize > MaxSize ->
+                    badarg_error(rep, As, St);
+               I > 100 ->
                     %% For many repetitions.
                     I1 = (I-1) div 100,
                     I2 = (I-1) rem 100,

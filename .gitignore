@@ -23,3 +23,4 @@ logs
 *.iml
 rebar3.crashdump
 erl_crash.dump
+test/lua-conformance/lua-5.5.0-tests/
