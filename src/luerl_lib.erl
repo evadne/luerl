@@ -136,6 +136,40 @@ format_error({assert_error,Obj}) ->
             Type = luerl_lib_basic:type(Obj),
             <<"error object is a ",Type/binary,$!>>
     end;
+%% Pack/unpack errors.
+format_error({pack_out_of_limits, N}) ->
+    unicode:characters_to_binary(
+      io_lib:format("(~w) out of limits [1,16]", [N]));
+format_error({pack_overflow, _}) ->
+    <<"overflow">>;
+format_error({pack_integer_overflow, N}) ->
+    unicode:characters_to_binary(
+      io_lib:format("~w-byte integer does not fit into Lua Integer", [N]));
+format_error({pack_invalid_format, C}) ->
+    unicode:characters_to_binary(
+      io_lib:format("invalid format option '~c'", [C]));
+format_error({pack_not_power_of_2, _}) ->
+    <<"not power of 2">>;
+format_error(pack_missing_size) ->
+    <<"missing size">>;
+format_error(pack_variable_length) ->
+    <<"variable-length format">>;
+format_error({pack_too_large, _}) ->
+    <<"too large">>;
+format_error({pack_string_longer, _}) ->
+    <<"longer than">>;
+format_error({pack_string_contains_zeros, _}) ->
+    <<"contains zeros">>;
+format_error({pack_out_of_string, _}) ->
+    <<"out of string">>;
+format_error({pack_too_short, _}) ->
+    <<"too short">>;
+format_error({pack_does_not_fit, _}) ->
+    <<"does not fit">>;
+format_error(pack_invalid_next_option) ->
+    <<"invalid next option">>;
+format_error({pack_invalid_format_string, _}) ->
+    <<"invalid format">>;
 %% We have an error message here already.
 format_error({error_message,Msg}) ->
     Msg;
