@@ -414,11 +414,11 @@ pcall(_, [F|As], St0) ->
             error(FuelErr);
         %% Only catch Lua errors here, signal system errors.
         error:{lua_error,{error_call, Eas},St2} ->
+            %% Return the error object as-is (Lua 5.3 semantics).
+            %% pcall returns the raw error value, not tostring'd.
             Msg = case Eas of
-                      [E|_] ->
-                          {Str,_} = luerl_lib:tostring(E, St2),
-                          Str;
-                      [] -> <<"nil">>
+                      [E|_] -> E;
+                      [] -> nil          %error() with no args
                   end,
             {[false,Msg],St2};
         error:{lua_error,E,St2} ->
