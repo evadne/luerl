@@ -24,7 +24,7 @@
 
 %% The basic entry point to set up the function table.
 -export([install/1,byte/3,char/3,dump/3,find/3,format/3,gmatch/3,gsub/3,len/3,lower/3,
-         match/3,rep/3,reverse/3,sub/3,upper/3]).
+         match/3,pack/3,packsize/3,rep/3,reverse/3,sub/3,unpack/3,upper/3]).
 
 %% Export some test functions.
 -export([test_gsub/3,test_match_pat/3,test_pat/1,
@@ -57,10 +57,13 @@ table() ->					%String table
      {<<"gsub">>,#erl_mfa{m=?MODULE,f=gsub}},
      {<<"len">>,#erl_mfa{m=?MODULE,f=len}},
      {<<"lower">>,#erl_mfa{m=?MODULE,f=lower}},
+     {<<"pack">>,#erl_mfa{m=?MODULE,f=pack}},
+     {<<"packsize">>,#erl_mfa{m=?MODULE,f=packsize}},
      {<<"match">>,#erl_mfa{m=?MODULE,f=match}},
      {<<"rep">>,#erl_mfa{m=?MODULE,f=rep}},
      {<<"reverse">>,#erl_mfa{m=?MODULE,f=reverse}},
      {<<"sub">>,#erl_mfa{m=?MODULE,f=sub}},
+     {<<"unpack">>,#erl_mfa{m=?MODULE,f=unpack}},
      {<<"upper">>,#erl_mfa{m=?MODULE,f=upper}}
     ].
 
@@ -895,3 +898,518 @@ is_z_char(C) -> C =:= 0.			%The zero character, deprecated
 %% char_table(C) when C >= 0, C =< 31 -> ?_C;
 %% char_table(C) when C >= 65, C =< 91 -> ?_U bor ?_A;
 %% char_table(C) when C >= 97, C =< 123 -> ?_L;
+
+%% ===================================================================
+%% string.pack, string.unpack, string.packsize
+%% ===================================================================
+
+-define(PACK_NB, 16).
+-define(SIZEOF_SHORT, 2).
+-define(SIZEOF_INT, 4).
+-define(SIZEOF_LONG, 8).
+-define(SIZEOF_SIZE_T, 8).
+-define(SIZEOF_LUA_INTEGER, 8).
+-define(SIZEOF_LUA_NUMBER, 8).
+-define(SIZEOF_FLOAT, 4).
+-define(SIZEOF_DOUBLE, 8).
+-define(NATIVE_ENDIAN, little).
+
+%% Pack state record
+-record(pst, {endian = ?NATIVE_ENDIAN, max_align = 1}).
+
+%% --- string.pack ---
+
+pack(_, As, St) ->
+    case luerl_lib:conv_list(As, [lua_string]) of
+        [Fmt|_] ->
+            try
+                Vals = tl(As),
+                {Bin, _Vals2} = pack_loop(binary_to_list(Fmt), Vals, #pst{}, 0, []),
+                {[iolist_to_binary(Bin)], St}
+            catch
+                throw:{error, E} -> lua_error(E, St)
+            end;
+        _ -> badarg_error(pack, As, St)
+    end.
+
+pack_loop([], _Vals, _Pst, _Pos, Acc) ->
+    {lists:reverse(Acc), []};
+pack_loop(Fmt, Vals, Pst, Pos, Acc) ->
+    {Item, Fmt2, Vals2, Pst2, Pos2} = pack_one(Fmt, Vals, Pst, Pos),
+    pack_loop(Fmt2, Vals2, Pst2, Pos2, [Item|Acc]).
+
+pack_one([$b|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, 1, signed, Fmt, Vals, Pst, Pos);
+pack_one([$B|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, 1, unsigned, Fmt, Vals, Pst, Pos);
+pack_one([$h|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_SHORT, signed, Fmt, Vals, Pst, Pos);
+pack_one([$H|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_SHORT, unsigned, Fmt, Vals, Pst, Pos);
+pack_one([$l|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_LONG, signed, Fmt, Vals, Pst, Pos);
+pack_one([$L|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_LONG, unsigned, Fmt, Vals, Pst, Pos);
+pack_one([$j|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_LUA_INTEGER, signed, Fmt, Vals, Pst, Pos);
+pack_one([$J|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_LUA_INTEGER, unsigned, Fmt, Vals, Pst, Pos);
+pack_one([$T|Fmt], [V|Vals], Pst, Pos) ->
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, ?SIZEOF_SIZE_T, unsigned, Fmt, Vals, Pst, Pos);
+pack_one([$i|Fmt], [V|Vals], Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, N, signed, Fmt2, Vals, Pst, Pos);
+pack_one([$I|Fmt], [V|Vals], Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    Int = luerl_lib:arg_to_integer(V),
+    pack_int(Int, N, unsigned, Fmt2, Vals, Pst, Pos);
+pack_one([$f|Fmt], [V|Vals], Pst, Pos) ->
+    Num = to_float(V),
+    pack_float(Num, ?SIZEOF_FLOAT, Fmt, Vals, Pst, Pos);
+pack_one([$d|Fmt], [V|Vals], Pst, Pos) ->
+    Num = to_float(V),
+    pack_float(Num, ?SIZEOF_DOUBLE, Fmt, Vals, Pst, Pos);
+pack_one([$n|Fmt], [V|Vals], Pst, Pos) ->
+    Num = to_float(V),
+    pack_float(Num, ?SIZEOF_DOUBLE, Fmt, Vals, Pst, Pos);
+pack_one([$c|Fmt], [V|Vals], Pst, Pos) ->
+    {N, Fmt2} = parse_number(Fmt),
+    S = luerl_lib:arg_to_list(V),
+    Bin = iolist_to_binary(S),
+    Len = byte_size(Bin),
+    if Len > N -> throw({error, {pack_string_longer, N}});
+       true ->
+            Pad = N - Len,
+            {[Bin, <<0:(Pad*8)>>], Fmt2, Vals, Pst, Pos + N}
+    end;
+pack_one([$s|Fmt], [V|Vals], Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_SIZE_T),
+    S = luerl_lib:arg_to_list(V),
+    Bin = iolist_to_binary(S),
+    Len = byte_size(Bin),
+    MaxVal = (1 bsl (N * 8)) - 1,
+    if Len > MaxVal -> throw({error, {pack_does_not_fit, N}});
+       true ->
+            Align = pack_align(N, Pst),
+            PadBits = align_padding(Pos, Align) * 8,
+            Pos2 = Pos + align_padding(Pos, Align),
+            LenBin = encode_int(Len, N, unsigned, Pst#pst.endian),
+            {[<<0:PadBits>>, LenBin, Bin], Fmt2, Vals, Pst, Pos2 + N + Len}
+    end;
+pack_one([$z|Fmt], [V|Vals], Pst, Pos) ->
+    S = luerl_lib:arg_to_list(V),
+    Bin = iolist_to_binary(S),
+    case binary:match(Bin, <<0>>) of
+        nomatch ->
+            {[Bin, <<0>>], Fmt, Vals, Pst, Pos + byte_size(Bin) + 1};
+        _ ->
+            throw({error, {pack_string_contains_zeros, z}})
+    end;
+pack_one([$x|Fmt], Vals, Pst, Pos) ->
+    {<<0>>, Fmt, Vals, Pst, Pos + 1};
+pack_one([$X|Fmt], Vals, Pst, Pos) ->
+    {_Size, NatAlign, Fmt2} = parse_x_option(Fmt),
+    Align = min(NatAlign, Pst#pst.max_align),
+    Pad = align_padding(Pos, Align),
+    {<<0:(Pad*8)>>, Fmt2, Vals, Pst, Pos + Pad};
+pack_one([$ |Fmt], Vals, Pst, Pos) ->
+    {<<>>, Fmt, Vals, Pst, Pos};
+pack_one([$<|Fmt], Vals, Pst, Pos) ->
+    {<<>>, Fmt, Vals, Pst#pst{endian=little}, Pos};
+pack_one([$>|Fmt], Vals, Pst, Pos) ->
+    {<<>>, Fmt, Vals, Pst#pst{endian=big}, Pos};
+pack_one([$=|Fmt], Vals, Pst, Pos) ->
+    {<<>>, Fmt, Vals, Pst#pst{endian=?NATIVE_ENDIAN}, Pos};
+pack_one([$!|Fmt], Vals, Pst, Pos) ->
+    {N, Fmt2} = parse_align_size(Fmt),
+    {<<>>, Fmt2, Vals, Pst#pst{max_align=N}, Pos};
+pack_one([C|_], _Vals, _Pst, _Pos) ->
+    throw({error, {pack_invalid_format, C}}).
+
+pack_int(Int, Size, Sign, Fmt, Vals, Pst, Pos) ->
+    check_int_overflow(Int, Size, Sign),
+    Align = pack_align(Size, Pst),
+    PadBits = align_padding(Pos, Align) * 8,
+    Pos2 = Pos + align_padding(Pos, Align),
+    Bin = encode_int(Int, Size, Sign, Pst#pst.endian),
+    {[<<0:PadBits>>, Bin], Fmt, Vals, Pst, Pos2 + Size}.
+
+pack_float(Num, Size, Fmt, Vals, Pst, Pos) ->
+    Align = pack_align(Size, Pst),
+    PadBits = align_padding(Pos, Align) * 8,
+    Pos2 = Pos + align_padding(Pos, Align),
+    Bin = encode_float(Num, Size, Pst#pst.endian),
+    {[<<0:PadBits>>, Bin], Fmt, Vals, Pst, Pos2 + Size}.
+
+pack_align(Size, #pst{max_align=MaxAlign}) ->
+    min(Size, MaxAlign).
+
+%% --- string.unpack ---
+
+unpack(_, As, St) ->
+    case luerl_lib:conv_list(As, [lua_string, lua_string, lua_integer]) of
+        [Fmt, S | Rest] ->
+            try
+                InitPos = case Rest of
+                              [P] -> resolve_pos(P, byte_size(S));
+                              _ -> 0
+                          end,
+                if InitPos < 0; InitPos > byte_size(S) ->
+                        throw({error, {pack_out_of_string, InitPos + 1}});
+                   true -> ok
+                end,
+                {Results, FinalPos} = unpack_loop(binary_to_list(Fmt), S, #pst{}, InitPos, []),
+                {lists:reverse(Results) ++ [FinalPos + 1], St}
+            catch
+                throw:{error, E} -> lua_error(E, St)
+            end;
+        _ -> badarg_error(unpack, As, St)
+    end.
+
+resolve_pos(P, Len) when P < 0 -> max(0, Len + P);
+resolve_pos(P, _Len) -> P - 1.
+
+unpack_loop([], _S, _Pst, Pos, Acc) ->
+    {Acc, Pos};
+unpack_loop(Fmt, S, Pst, Pos, Acc) ->
+    {Val, Fmt2, Pst2, Pos2} = unpack_one(Fmt, S, Pst, Pos),
+    case Val of
+        none -> unpack_loop(Fmt2, S, Pst2, Pos2, Acc);
+        _ -> unpack_loop(Fmt2, S, Pst2, Pos2, [Val|Acc])
+    end.
+
+unpack_one([$b|Fmt], S, Pst, Pos) ->
+    unpack_int(1, signed, Fmt, S, Pst, Pos);
+unpack_one([$B|Fmt], S, Pst, Pos) ->
+    unpack_int(1, unsigned, Fmt, S, Pst, Pos);
+unpack_one([$h|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_SHORT, signed, Fmt, S, Pst, Pos);
+unpack_one([$H|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_SHORT, unsigned, Fmt, S, Pst, Pos);
+unpack_one([$l|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_LONG, signed, Fmt, S, Pst, Pos);
+unpack_one([$L|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_LONG, unsigned, Fmt, S, Pst, Pos);
+unpack_one([$j|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_LUA_INTEGER, signed, Fmt, S, Pst, Pos);
+unpack_one([$J|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_LUA_INTEGER, unsigned, Fmt, S, Pst, Pos);
+unpack_one([$T|Fmt], S, Pst, Pos) ->
+    unpack_int(?SIZEOF_SIZE_T, unsigned, Fmt, S, Pst, Pos);
+unpack_one([$i|Fmt], S, Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    unpack_int(N, signed, Fmt2, S, Pst, Pos);
+unpack_one([$I|Fmt], S, Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    unpack_int(N, unsigned, Fmt2, S, Pst, Pos);
+unpack_one([$f|Fmt], S, Pst, Pos) ->
+    unpack_float(?SIZEOF_FLOAT, Fmt, S, Pst, Pos);
+unpack_one([$d|Fmt], S, Pst, Pos) ->
+    unpack_float(?SIZEOF_DOUBLE, Fmt, S, Pst, Pos);
+unpack_one([$n|Fmt], S, Pst, Pos) ->
+    unpack_float(?SIZEOF_DOUBLE, Fmt, S, Pst, Pos);
+unpack_one([$c|Fmt], S, Pst, Pos) ->
+    {N, Fmt2} = parse_number(Fmt),
+    check_str_avail(S, Pos, N),
+    Bin = binary:part(S, Pos, N),
+    {Bin, Fmt2, Pst, Pos + N};
+unpack_one([$s|Fmt], S, Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_SIZE_T),
+    Align = pack_align(N, Pst),
+    Pos2 = Pos + align_padding(Pos, Align),
+    check_str_avail(S, Pos2, N),
+    LenBin = binary:part(S, Pos2, N),
+    Len = decode_int(LenBin, N, unsigned, Pst#pst.endian),
+    Pos3 = Pos2 + N,
+    check_str_avail(S, Pos3, Len),
+    Str = binary:part(S, Pos3, Len),
+    {Str, Fmt2, Pst, Pos3 + Len};
+unpack_one([$z|Fmt], S, Pst, Pos) ->
+    case binary:match(S, <<0>>, [{scope, {Pos, byte_size(S) - Pos}}]) of
+        {ZPos, 1} ->
+            Str = binary:part(S, Pos, ZPos - Pos),
+            {Str, Fmt, Pst, ZPos + 1};
+        nomatch ->
+            throw({error, {pack_too_short, z}})
+    end;
+unpack_one([$x|Fmt], S, Pst, Pos) ->
+    check_str_avail(S, Pos, 1),
+    {none, Fmt, Pst, Pos + 1};
+unpack_one([$X|Fmt], _S, Pst, Pos) ->
+    {_Size, NatAlign, Fmt2} = parse_x_option(Fmt),
+    Align = min(NatAlign, Pst#pst.max_align),
+    Pos2 = Pos + align_padding(Pos, Align),
+    {none, Fmt2, Pst, Pos2};
+unpack_one([$ |Fmt], _S, Pst, Pos) ->
+    {none, Fmt, Pst, Pos};
+unpack_one([$<|Fmt], _S, Pst, Pos) ->
+    {none, Fmt, Pst#pst{endian=little}, Pos};
+unpack_one([$>|Fmt], _S, Pst, Pos) ->
+    {none, Fmt, Pst#pst{endian=big}, Pos};
+unpack_one([$=|Fmt], _S, Pst, Pos) ->
+    {none, Fmt, Pst#pst{endian=?NATIVE_ENDIAN}, Pos};
+unpack_one([$!|Fmt], _S, Pst, Pos) ->
+    {N, Fmt2} = parse_align_size(Fmt),
+    {none, Fmt2, Pst#pst{max_align=N}, Pos};
+unpack_one([C|_], _S, _Pst, _Pos) ->
+    throw({error, {pack_invalid_format, C}}).
+
+unpack_int(Size, Sign, Fmt, S, Pst, Pos) ->
+    Align = pack_align(Size, Pst),
+    Pos2 = Pos + align_padding(Pos, Align),
+    check_str_avail(S, Pos2, Size),
+    Bin = binary:part(S, Pos2, Size),
+    Val = decode_int(Bin, Size, Sign, Pst#pst.endian),
+    %% Check if fits in lua integer for large unsigned
+    if Sign =:= unsigned, Size > ?SIZEOF_LUA_INTEGER ->
+            %% Check sign bit of the decoded value
+            check_unsigned_fits(Val, Size);
+       Sign =:= signed, Size > ?SIZEOF_LUA_INTEGER ->
+            check_signed_fits(Val, Size);
+       true -> ok
+    end,
+    {Val, Fmt, Pst, Pos2 + Size}.
+
+unpack_float(Size, Fmt, S, Pst, Pos) ->
+    Align = pack_align(Size, Pst),
+    Pos2 = Pos + align_padding(Pos, Align),
+    check_str_avail(S, Pos2, Size),
+    Bin = binary:part(S, Pos2, Size),
+    Val = decode_float(Bin, Size, Pst#pst.endian),
+    {Val, Fmt, Pst, Pos2 + Size}.
+
+%% --- string.packsize ---
+
+packsize(_, As, St) ->
+    case luerl_lib:conv_list(As, [lua_string]) of
+        [Fmt] ->
+            try
+                Size = packsize_loop(binary_to_list(Fmt), #pst{}, 0),
+                {[Size], St}
+            catch
+                throw:{error, E} -> lua_error(E, St)
+            end;
+        _ -> badarg_error(packsize, As, St)
+    end.
+
+packsize_loop([], _Pst, Size) -> Size;
+packsize_loop(Fmt, Pst, Size) ->
+    {ItemSize, Fmt2, Pst2} = packsize_one(Fmt, Pst, Size),
+    packsize_loop(Fmt2, Pst2, ItemSize).
+
+packsize_one([$b|Fmt], Pst, Pos) -> {Pos + 1, Fmt, Pst};
+packsize_one([$B|Fmt], Pst, Pos) -> {Pos + 1, Fmt, Pst};
+packsize_one([$h|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_SHORT, Fmt, Pst, Pos);
+packsize_one([$H|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_SHORT, Fmt, Pst, Pos);
+packsize_one([$l|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_LONG, Fmt, Pst, Pos);
+packsize_one([$L|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_LONG, Fmt, Pst, Pos);
+packsize_one([$j|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_LUA_INTEGER, Fmt, Pst, Pos);
+packsize_one([$J|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_LUA_INTEGER, Fmt, Pst, Pos);
+packsize_one([$T|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_SIZE_T, Fmt, Pst, Pos);
+packsize_one([$i|Fmt], Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    packsize_aligned(N, Fmt2, Pst, Pos);
+packsize_one([$I|Fmt], Pst, Pos) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    packsize_aligned(N, Fmt2, Pst, Pos);
+packsize_one([$f|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_FLOAT, Fmt, Pst, Pos);
+packsize_one([$d|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_DOUBLE, Fmt, Pst, Pos);
+packsize_one([$n|Fmt], Pst, Pos) -> packsize_aligned(?SIZEOF_DOUBLE, Fmt, Pst, Pos);
+packsize_one([$c|Fmt], Pst, Pos) ->
+    {N, Fmt2} = parse_number(Fmt),
+    check_packsize_overflow(Pos, N),
+    {Pos + N, Fmt2, Pst};
+packsize_one([$s|_Fmt], _Pst, _Pos) ->
+    throw({error, pack_variable_length});
+packsize_one([$z|_Fmt], _Pst, _Pos) ->
+    throw({error, pack_variable_length});
+packsize_one([$x|Fmt], Pst, Pos) -> {Pos + 1, Fmt, Pst};
+packsize_one([$X|Fmt], Pst, Pos) ->
+    {_Size, NatAlign, Fmt2} = parse_x_option(Fmt),
+    Align = min(NatAlign, Pst#pst.max_align),
+    Pad = align_padding(Pos, Align),
+    {Pos + Pad, Fmt2, Pst};
+packsize_one([$ |Fmt], Pst, Pos) -> {Pos, Fmt, Pst};
+packsize_one([$<|Fmt], Pst, Pos) -> {Pos, Fmt, Pst#pst{endian=little}};
+packsize_one([$>|Fmt], Pst, Pos) -> {Pos, Fmt, Pst#pst{endian=big}};
+packsize_one([$=|Fmt], Pst, Pos) -> {Pos, Fmt, Pst#pst{endian=?NATIVE_ENDIAN}};
+packsize_one([$!|Fmt], Pst, Pos) ->
+    {N, Fmt2} = parse_align_size(Fmt),
+    {Pos, Fmt2, Pst#pst{max_align=N}};
+packsize_one([C|_], _Pst, _Pos) ->
+    throw({error, {pack_invalid_format, C}}).
+
+packsize_aligned(Size, Fmt, Pst, Pos) ->
+    Align = pack_align(Size, Pst),
+    Pos2 = Pos + align_padding(Pos, Align),
+    check_packsize_overflow(Pos2, Size),
+    {Pos2 + Size, Fmt, Pst}.
+
+check_packsize_overflow(Pos, Size) ->
+    Max = 16#7fffffff,
+    if Pos + Size > Max -> throw({error, {pack_too_large, Pos + Size}});
+       true -> ok
+    end.
+
+%% --- Helpers ---
+
+to_float(V) ->
+    case luerl_lib:arg_to_number(V) of
+        N when is_integer(N) -> float(N);
+        N when is_float(N) -> N;
+        _ -> throw({error, {badarg, pack, [V]}})
+    end.
+
+parse_int_size(Fmt, Default) ->
+    case parse_optional_number(Fmt) of
+        {none, Fmt2} -> {Default, Fmt2};
+        {N, Fmt2} ->
+            if N < 1; N > ?PACK_NB ->
+                    throw({error, {pack_out_of_limits, N}});
+               true -> {N, Fmt2}
+            end
+    end.
+
+parse_align_size(Fmt) ->
+    case parse_optional_number(Fmt) of
+        {none, Fmt2} -> {1, Fmt2};
+        {N, Fmt2} ->
+            if N > ?PACK_NB ->
+                    throw({error, {pack_out_of_limits, N}});
+               (N band (N - 1)) =/= 0 ->
+                    throw({error, {pack_not_power_of_2, N}});
+               true -> {N, Fmt2}
+            end
+    end.
+
+parse_number(Fmt) ->
+    case parse_optional_number(Fmt) of
+        {none, _} -> throw({error, pack_missing_size});
+        {N, Fmt2} -> {N, Fmt2}
+    end.
+
+parse_optional_number([D|Fmt]) when D >= $0, D =< $9 ->
+    parse_digits(Fmt, D - $0, 1);
+parse_optional_number(Fmt) ->
+    {none, Fmt}.
+
+parse_digits([D|Fmt], Acc, Count) when D >= $0, D =< $9 ->
+    NewAcc = Acc * 10 + (D - $0),
+    if Count >= 10 ->
+            throw({error, {pack_invalid_format_string, overflow}});
+       true ->
+            parse_digits(Fmt, NewAcc, Count + 1)
+    end;
+parse_digits(Fmt, Acc, _Count) ->
+    {Acc, Fmt}.
+
+align_padding(_Pos, 1) -> 0;
+align_padding(Pos, Align) ->
+    case Pos rem Align of
+        0 -> 0;
+        R -> Align - R
+    end.
+
+natural_align($b) -> 1;
+natural_align($B) -> 1;
+natural_align($h) -> ?SIZEOF_SHORT;
+natural_align($H) -> ?SIZEOF_SHORT;
+natural_align($l) -> ?SIZEOF_LONG;
+natural_align($L) -> ?SIZEOF_LONG;
+natural_align($j) -> ?SIZEOF_LUA_INTEGER;
+natural_align($J) -> ?SIZEOF_LUA_INTEGER;
+natural_align($T) -> ?SIZEOF_SIZE_T;
+natural_align($f) -> ?SIZEOF_FLOAT;
+natural_align($d) -> ?SIZEOF_DOUBLE;
+natural_align($n) -> ?SIZEOF_DOUBLE;
+natural_align($x) -> 1;
+natural_align($i) -> ?SIZEOF_INT;
+natural_align($I) -> ?SIZEOF_INT;
+natural_align(_) -> throw({error, pack_invalid_next_option}).
+
+option_size($i, Fmt) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    {N, N, Fmt2};
+option_size($I, Fmt) ->
+    {N, Fmt2} = parse_int_size(Fmt, ?SIZEOF_INT),
+    {N, N, Fmt2};
+option_size(C, Fmt) ->
+    A = natural_align(C),
+    {A, A, Fmt}.
+
+parse_x_option([]) ->
+    throw({error, pack_invalid_next_option});
+parse_x_option([C|_Fmt]) when C =:= $ ; C =:= $X; C =:= $c ->
+    throw({error, pack_invalid_next_option});
+parse_x_option([C|Fmt]) ->
+    {_Size, NatAlign, Fmt2} = option_size(C, Fmt),
+    {0, NatAlign, Fmt2}.
+
+encode_int(Int, Size, _Sign, little) ->
+    <<Int:(Size*8)/little-signed-integer>>;
+encode_int(Int, Size, _Sign, big) ->
+    <<Int:(Size*8)/big-signed-integer>>.
+
+decode_int(Bin, Size, signed, little) ->
+    <<Val:(Size*8)/little-signed-integer>> = Bin, Val;
+decode_int(Bin, Size, unsigned, little) ->
+    <<Val:(Size*8)/little-unsigned-integer>> = Bin, Val;
+decode_int(Bin, Size, signed, big) ->
+    <<Val:(Size*8)/big-signed-integer>> = Bin, Val;
+decode_int(Bin, Size, unsigned, big) ->
+    <<Val:(Size*8)/big-unsigned-integer>> = Bin, Val.
+
+encode_float(Num, 4, little) -> <<Num:32/little-float>>;
+encode_float(Num, 4, big) -> <<Num:32/big-float>>;
+encode_float(Num, 8, little) -> <<Num:64/little-float>>;
+encode_float(Num, 8, big) -> <<Num:64/big-float>>.
+
+decode_float(Bin, 4, little) -> <<V:32/little-float>> = Bin, V;
+decode_float(Bin, 4, big) -> <<V:32/big-float>> = Bin, V;
+decode_float(Bin, 8, little) -> <<V:64/little-float>> = Bin, V;
+decode_float(Bin, 8, big) -> <<V:64/big-float>> = Bin, V.
+
+check_int_overflow(Int, _Size, unsigned) when Int < 0 ->
+    throw({error, {pack_overflow, Int}});
+check_int_overflow(Int, Size, unsigned) ->
+    Max = (1 bsl (Size * 8)) - 1,
+    if Int > Max -> throw({error, {pack_overflow, Int}});
+       true -> ok
+    end;
+check_int_overflow(Int, Size, signed) ->
+    Max = (1 bsl (Size * 8 - 1)) - 1,
+    Min = -(1 bsl (Size * 8 - 1)),
+    if Int > Max; Int < Min -> throw({error, {pack_overflow, Int}});
+       true -> ok
+    end.
+
+check_unsigned_fits(Val, Size) ->
+    MaxLuaInt = (1 bsl (?SIZEOF_LUA_INTEGER * 8)) - 1,
+    if Val > MaxLuaInt ->
+            throw({error, {pack_does_not_fit, Size}});
+       true -> ok
+    end.
+
+check_signed_fits(Val, Size) ->
+    MaxLuaInt = (1 bsl (?SIZEOF_LUA_INTEGER * 8 - 1)) - 1,
+    MinLuaInt = -(1 bsl (?SIZEOF_LUA_INTEGER * 8 - 1)),
+    if Val > MaxLuaInt; Val < MinLuaInt ->
+            throw({error, {pack_integer_overflow, Size}});
+       true -> ok
+    end.
+
+check_str_avail(S, Pos, Need) ->
+    if Pos + Need > byte_size(S) ->
+            throw({error, {pack_too_short, Need}});
+       true -> ok
+    end.
