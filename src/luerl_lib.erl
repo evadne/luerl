@@ -91,6 +91,8 @@ format_error(illegal_return_value) ->
     <<"illegal format of return value">>;
 format_error({illegal_return_value,Func}) ->
     format_error(<<"illegal format of return value to ~ts">>, [Func]);
+format_error(tostring_must_return_string) ->
+    <<"'__tostring' must return a string">>;
 %% Pattern errors.
 format_error(invalid_pattern) ->                %Keep text!
     <<"malformed pattern">>;
@@ -412,7 +414,7 @@ tostring_meta(Arg, Meta, St0) ->
     if is_binary(Ret) -> {Ret,St1};
        is_number(Ret) -> {iolist_to_binary(io_lib:write(Ret)),St1};
        true ->
-            lua_error({illegal_return_value,tostring}, St1)
+            lua_error(tostring_must_return_string, St1)
     end.
 
 %% tostring_tag(Data, NameTag) -> Binary.
