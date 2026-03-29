@@ -105,6 +105,8 @@ format_error(invalid_char_set) ->               %Keep text!
     <<"malformed pattern (missing ']')">>;
 format_error(missing_frontier_set) ->
     <<"missing '[' after '%%f' in pattern">>;
+format_error(pattern_too_complex) ->
+    <<"pattern too complex">>;
 %% Replacement errors.
 format_error({invalid_repl_value,Type}) ->
     Msg = io_lib:format("invalid replacement value (a ~s)", [Type]),

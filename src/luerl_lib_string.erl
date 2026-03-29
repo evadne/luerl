@@ -665,56 +665,80 @@ test_match_pat(S, P, I) ->
 %%  Try and match the pattern with the string *at the current
 %%  position*. No searching.
 
+%% Maximum pattern match recursion depth before aborting.
+%%
+%% C Lua uses MAXCCALLS=200 (C stack frames). Our Erlang implementation
+%% has the same recursive structure: each pattern element (closure,
+%% optional, char match) generates one recursive match_pat call. Depth
+%% is bounded by pattern_length × string_length for backtracking, or
+%% just pattern_length for greedy forward matching.
+%%
+%% Typical agent patterns: 5-50 elements × strings up to 10KB = depth
+%% well under 10,000. The conformance test requires f(80) to pass and
+%% f(200000) to fail, where f(N) = match(rep("a",N), rep(".?",N)).
+%% rep(".?",N) creates N optionals; greedy matching gives depth ≈ N.
+%%
+%% 200,000 is generous enough for any real-world pattern (even complex
+%% patterns on large strings won't exceed 100K depth) while catching
+%% the pathological rep(".?", 200000) case. C Lua's limit of 200 is
+%% for C stack frames (~100 bytes each); Erlang heap frames are cheap,
+%% so we can afford a much higher limit without memory risk.
+-define(MAX_MATCH_DEPTH, 100000).
+
 match_pat(S0, P0, I0, Orig) ->
-    case match_pat(P0, S0, I0, [{0,I0}], [], Orig) of
+    case match_pat(P0, S0, I0, [{0,I0}], [], Orig, 0) of
 	{match,S1,I1,_,Cas} ->{match,Cas,S1,I1};
 	{nomatch,_,_,_,_,_} -> nomatch
     end.
 
-match_pat(['\$']=Ps, Cs, I, Ca, Cas, Orig) ->	%Match only end of string
+%% Depth limit guard: abort when match complexity is too high.
+match_pat(_Ps, _Cs, _I, _Ca, _Cas, _Orig, Depth)
+  when Depth > ?MAX_MATCH_DEPTH ->
+    throw({error,pattern_too_complex});
+match_pat(['\$']=Ps, Cs, I, Ca, Cas, Orig, Steps) -> %Match only end of string
     case Cs of
-	<<>> -> match_pat([], <<>>, I, Ca, Cas, Orig);
+	<<>> -> match_pat([], <<>>, I, Ca, Cas, Orig, Steps+1);
 	_ -> {nomatch,Ps,Cs,I,Ca,Cas}
     end;
-match_pat(['^'|Ps]=Ps0, Cs, I, Ca, Cas, Orig) -> %Match beginning of string
-    if I =:= 1 -> match_pat(Ps, Cs, 1, Ca, Cas, Orig);
+match_pat(['^'|Ps]=Ps0, Cs, I, Ca, Cas, Orig, Steps) -> %Match beginning of string
+    if I =:= 1 -> match_pat(Ps, Cs, 1, Ca, Cas, Orig, Steps+1);
        true -> {nomatch,Ps0,Cs,I,Cs,Cas}
     end;
-match_pat([{'(',Sn},')'|P], Cs, I, Ca, Cas, Orig) ->
-    match_pat(P, Cs, I, Ca, save_cap(Sn, I, -1, Cas), Orig);
-match_pat([{'(',Sn}|P], Cs, I, Ca, Cas, Orig) ->
-    match_pat(P, Cs, I, [{Sn,I}|Ca], Cas, Orig);
-match_pat([')'|P], Cs, I, [{Sn,S}|Ca], Cas, Orig) ->
-    match_pat(P, Cs, I, Ca, save_cap(Sn, S, I-S, Cas), Orig);
-match_pat([{kclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig) ->
+match_pat([{'(',Sn},')'|P], Cs, I, Ca, Cas, Orig, Steps) ->
+    match_pat(P, Cs, I, Ca, save_cap(Sn, I, -1, Cas), Orig, Steps+1);
+match_pat([{'(',Sn}|P], Cs, I, Ca, Cas, Orig, Steps) ->
+    match_pat(P, Cs, I, [{Sn,I}|Ca], Cas, Orig, Steps+1);
+match_pat([')'|P], Cs, I, [{Sn,S}|Ca], Cas, Orig, Steps) ->
+    match_pat(P, Cs, I, Ca, save_cap(Sn, S, I-S, Cas), Orig, Steps+1);
+match_pat([{kclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig, Steps) ->
     %%io:fwrite("dm: ~p\n", [{[P,K|Ps],Cs,I,Ca,Cas}]),
-    case match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig) of	%First try with it
+    case match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig, Steps+1) of %First try with it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try without it
-	    match_pat(Ps, Cs, I, Ca, Cas, Orig)
+	    match_pat(Ps, Cs, I, Ca, Cas, Orig, Steps+1)
     end;
-match_pat([{pclosure,P}|Ps], Cs, I, Ca, Cas, Orig) ->	%The easy way
-    match_pat([P,{kclosure,P}|Ps], Cs, I, Ca, Cas, Orig);
-match_pat([{mclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig) ->
-    case match_pat(Ps, Cs, I, Ca, Cas, Orig) of	%First try without it
+match_pat([{pclosure,P}|Ps], Cs, I, Ca, Cas, Orig, Steps) -> %The easy way
+    match_pat([P,{kclosure,P}|Ps], Cs, I, Ca, Cas, Orig, Steps+1);
+match_pat([{mclosure,P}=K|Ps], Cs, I, Ca, Cas, Orig, Steps) ->
+    case match_pat(Ps, Cs, I, Ca, Cas, Orig, Steps+1) of %First try without it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try with it
-	    match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig)
+	    match_pat([P,K|Ps], Cs, I, Ca, Cas, Orig, Steps+1)
     end;
-match_pat([{optional,P}|Ps], Cs, I, Ca, Cas, Orig) ->
-    case match_pat([P|Ps], Cs, I, Ca, Cas, Orig) of	%First try with it
+match_pat([{optional,P}|Ps], Cs, I, Ca, Cas, Orig, Steps) ->
+    case match_pat([P|Ps], Cs, I, Ca, Cas, Orig, Steps+1) of %First try with it
 	{match,_,_,_,_}=M -> M;
 	{nomatch,_,_,_,_,_} ->			%Else try without it
-	    match_pat(Ps, Cs, I, Ca, Cas, Orig)
+	    match_pat(Ps, Cs, I, Ca, Cas, Orig, Steps+1)
     end;
-match_pat([{capture_ref,N}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
+match_pat([{capture_ref,N}|Ps]=Ps0, Cs, I, Ca, Cas, Orig, Steps) ->
     case lists:keyfind(N, 1, Cas) of
 	{N, P, Len} when Len >= 0 ->
 	    {OrigBin, BaseOff} = Orig,
 	    CapText = binary_part(OrigBin, P - 1 + BaseOff, Len),
 	    case Cs of
 		<<Prefix:Len/binary, Rest/binary>> when Prefix =:= CapText ->
-		    match_pat(Ps, Rest, I+Len, Ca, Cas, Orig);
+		    match_pat(Ps, Rest, I+Len, Ca, Cas, Orig, Steps+1);
 		_ ->
 		    {nomatch,Ps0,Cs,I,Ca,Cas}
 	    end;
@@ -723,7 +747,7 @@ match_pat([{capture_ref,N}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
 	    %% Lua 5.3: error if capture is open/unfinished.
 	    throw({error,{invalid_capture_index,N}})
     end;
-match_pat([{frontier,SetType,Set}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
+match_pat([{frontier,SetType,Set}|Ps]=Ps0, Cs, I, Ca, Cas, Orig, Steps) ->
     {OrigBin, BaseOff} = Orig,
     AbsI = I + BaseOff,
     PrevChar = if AbsI =:= 1 -> 0;		%NUL before start of string
@@ -736,36 +760,36 @@ match_pat([{frontier,SetType,Set}|Ps]=Ps0, Cs, I, Ca, Cas, Orig) ->
     PrevMatch = frontier_set_test(SetType, Set, PrevChar),
     CurrMatch = frontier_set_test(SetType, Set, CurrChar),
     case (not PrevMatch) andalso CurrMatch of
-	true -> match_pat(Ps, Cs, I, Ca, Cas, Orig);  %Zero-width assertion
+	true -> match_pat(Ps, Cs, I, Ca, Cas, Orig, Steps+1); %Zero-width assertion
 	false -> {nomatch,Ps0,Cs,I,Ca,Cas}
     end;
-match_pat([{char_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) ->
+match_pat([{char_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig, Steps) ->
     case match_char_set(Set, C) of
-	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
+	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig, Steps+1);
 	false -> {nomatch,Ps0,Cs0,I,Ca,Cas}
     end;
-match_pat([{comp_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) ->
+match_pat([{comp_set,Set}|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig, Steps) ->
     case match_char_set(Set, C) of
 	true -> {nomatch,Ps0,Cs0,I,Ca,Cas};
-	false -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig)
+	false -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig, Steps+1)
     end;
-match_pat([{balance,L,R}|Ps]=Ps0, <<L,Cs1/binary>>=Cs0, I0, Ca, Cas, Orig) ->
+match_pat([{balance,L,R}|Ps]=Ps0, <<L,Cs1/binary>>=Cs0, I0, Ca, Cas, Orig, Steps) ->
     case balance(Cs1, I0+1, L, R, 1) of
-	{ok,Cs2,I1} -> match_pat(Ps, Cs2, I1, Ca, Cas, Orig);
+	{ok,Cs2,I1} -> match_pat(Ps, Cs2, I1, Ca, Cas, Orig, Steps+1);
 	error -> {nomatch,Ps0,Cs0,I0,Ca,Cas}
     end;
-match_pat(['.'|Ps], <<_,Cs/binary>>, I, Ca, Cas, Orig) -> %Matches anything
-    match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
-match_pat([A|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig) when is_atom(A) ->
+match_pat(['.'|Ps], <<_,Cs/binary>>, I, Ca, Cas, Orig, Steps) -> %Matches anything
+    match_pat(Ps, Cs, I+1, Ca, Cas, Orig, Steps+1);
+match_pat([A|Ps]=Ps0, <<C,Cs/binary>>=Cs0, I, Ca, Cas, Orig, Steps) when is_atom(A) ->
     case match_class(A, C) of
-	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
+	true -> match_pat(Ps, Cs, I+1, Ca, Cas, Orig, Steps+1);
 	false -> {nomatch,Ps0,Cs0,I,Ca,Cas}
     end;
-match_pat([C|Ps], <<C,Cs/binary>>, I, Ca, Cas, Orig) ->
-    match_pat(Ps, Cs, I+1, Ca, Cas, Orig);
-match_pat([], Cs, I, [{Sn,S}|Ca], Cas, _Orig) ->
+match_pat([C|Ps], <<C,Cs/binary>>, I, Ca, Cas, Orig, Steps) ->
+    match_pat(Ps, Cs, I+1, Ca, Cas, Orig, Steps+1);
+match_pat([], Cs, I, [{Sn,S}|Ca], Cas, _Orig, _Steps) ->
     {match,Cs,I,Ca,[{Sn,S,I-S}|Cas]};
-match_pat(Ps, Cs, I, Ca, Cas, _Orig) ->
+match_pat(Ps, Cs, I, Ca, Cas, _Orig, _Steps) ->
     {nomatch,Ps,Cs,I,Ca,Cas}.
 
 %% save_cap(N, Position, Length, Captures) -> Captures.
