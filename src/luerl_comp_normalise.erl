@@ -36,11 +36,16 @@ chunk(Code0, #cinfo{opts=Opts}=Ci0) ->
     {ok,Code1}.
 
 stmts([{local,L,{functiondef,Lf,Name,Pars,Block}}|Ss], St) ->
-    %% Need to split this up to handle references to Name in the function.
+    %% Desugar: local function f(...) body end
+    %%      --> local f; f = function(...) body end
+    %% The second step MUST be a plain assign (not local) so the function
+    %% body's upvalue reference to f resolves to the local declared in step 1.
+    %% A second `local f = function(...)` would shadow step 1, leaving the
+    %% function body's f pointing at nil — breaking self-recursion.
     Fdef = {functiondef,Lf,Pars,Block},
     stmts([{local, L, {assign, L, [Name], [{nil,L}]}},
            {';',L},
-           {local, Lf, {assign, Lf, [Name], [Fdef]}} | Ss],
+           {assign, Lf, [Name], [Fdef]} | Ss],
           St);
 stmts([{';',_}|Ss], St) -> stmts(Ss, St);	%No-op so we drop it
 stmts([S0|Ss0], St0) ->
