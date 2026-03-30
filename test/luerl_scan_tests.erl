@@ -19,3 +19,31 @@
 syntax_error_test() ->
     State = luerl:init(),
     ?assertMatch({error, [{1,luerl_scan, {user,"syntax error near '\"'"}}], []}, luerl:do(<<"print(\"hi)">>, State)).
+
+leveled_long_string_partial_close_test() ->
+    ?assertMatch(
+        {ok, [{'NAME', 1, <<"a">>}, {'=', 1}, {'LITERALSTRING', 1, <<"]=">>}], 2},
+        luerl_scan:string("a = [==[]=]==]\n")
+    ).
+
+leveled_long_string_nested_equals_test() ->
+    ?assertMatch(
+        {ok,
+         [{'NAME', 1, <<"a">>},
+          {'=', 1},
+          {'LITERALSTRING', 1, <<"[===[[=[]]=][====[]]===]===">>}],
+         2},
+        luerl_scan:string("a = [====[[===[[=[]]=][====[]]===]===]====]\n")
+    ).
+
+leveled_long_comment_test() ->
+    ?assertMatch(
+        {ok, [{'NAME', 7, <<"a">>}, {'=', 7}, {'NUMERAL', 7, 1}], 8},
+        luerl_scan:string("--[===[\n"
+                          "x y z [==[ blu foo\n"
+                          "]==\n"
+                          "]\n"
+                          "]=]==]\n"
+                          "error error]=]===]\n"
+                          "a = 1\n")
+    ).
