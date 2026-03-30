@@ -364,13 +364,13 @@ exp(#fdef{}=F, S, St0) ->
     {If,St1} = functiondef(F, St0),
     {multiple_values(S, If), St1};
 exp(#op{op='and',args=[A1,A2]}, S, St0) ->
-    {Ia1,St1} = exp(A1, S, St0),
-    {Ia2,St2} = exp(A2, S, St1),
-    {Ia1 ++ [?AND_THEN(Ia2)],St2};		%Must handle single/multiple
+    {Ia1,St1} = exp(A1, single, St0),
+    {Ia2,St2} = exp(A2, single, St1),
+    {multiple_values(S, Ia1 ++ [?AND_THEN(Ia2)]),St2};
 exp(#op{op='or',args=[A1,A2]}, S, St0) ->
-    {Ia1,St1} = exp(A1, S, St0),
-    {Ia2,St2} = exp(A2, S, St1),
-    {Ia1 ++ [?OR_ELSE(Ia2)],St2};		%Must handle single/multiple
+    {Ia1,St1} = exp(A1, single, St0),
+    {Ia2,St2} = exp(A2, single, St1),
+    {multiple_values(S, Ia1 ++ [?OR_ELSE(Ia2)]),St2};
 exp(#op{op=Op,args=As}, S, St0) ->
     {Ias,St1} = explist(As, single, St0),
     Iop = Ias ++ [?OP(Op,length(As))],
