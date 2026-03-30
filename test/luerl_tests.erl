@@ -65,3 +65,13 @@ private_store_survives_gc_test() ->
     St3 = luerl:gc(St2),
     ?assertEqual([{<<"keep">>,<<"me">>}],
                  luerl:decode(luerl:get_private(mine, St3), St3)).
+
+short_circuit_operators_return_single_value_test() ->
+    State = luerl:init(),
+    Code = <<
+      "local function f() return 1,2,3 end\n"
+      "local a,b = 3 and f()\n"
+      "local c,d = false or f()\n"
+      "return a,b,c,d\n"
+    >>,
+    ?assertMatch({ok, [1, nil, 1, nil], _}, luerl:do(Code, State)).
