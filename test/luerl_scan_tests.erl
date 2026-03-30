@@ -37,3 +37,30 @@ float_literal_test_() ->
      ?_assertEqual(5.0, Do(<<"5.">>)),
      ?_assertEqual(100.0, Do(<<"1e2">>)),
      ?_assertEqual(42, Do(<<"42">>))].
+leveled_long_string_partial_close_test() ->
+    ?assertMatch(
+        {ok, [{'NAME', 1, <<"a">>}, {'=', 1}, {'LITERALSTRING', 1, <<"]=">>}], 2},
+        luerl_scan:string("a = [==[]=]==]\n")
+    ).
+
+leveled_long_string_nested_equals_test() ->
+    ?assertMatch(
+        {ok,
+         [{'NAME', 1, <<"a">>},
+          {'=', 1},
+          {'LITERALSTRING', 1, <<"[===[[=[]]=][====[]]===]===">>}],
+         2},
+        luerl_scan:string("a = [====[[===[[=[]]=][====[]]===]===]====]\n")
+    ).
+
+leveled_long_comment_test() ->
+    ?assertMatch(
+        {ok, [{'NAME', 7, <<"a">>}, {'=', 7}, {'NUMERAL', 7, 1}], 8},
+        luerl_scan:string("--[===[\n"
+                          "x y z [==[ blu foo\n"
+                          "]==\n"
+                          "]\n"
+                          "]=]==]\n"
+                          "error error]=]===]\n"
+                          "a = 1\n")
+    ).

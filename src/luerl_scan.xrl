@@ -67,15 +67,19 @@ Rules.
 \'(\\.|\\\n|[^'\\])*\' :
 	string_token(TokenChars, TokenLen, TokenLine).
 %% Handle multi line strings, [[ ]], [=[ ]=], [==[ ]==]
-%% This gets a bit tedious as we have to each case separately.
+%% This gets a bit tedious as we have to each case separately. The optional
+%% suffixes are needed so content such as "]=" can appear immediately before a
+%% level-2 close, "]==" before a level-3 close, and so on.
 \[\[([^]]|\][^]])*\]\] :
 	long_string_token(TokenChars, TokenLen, 2, TokenLine).
-\[=\[([^]]|\](=[^]]|[^=]))*\]=\] :
+\[=\[([^]]|\](=[^]]|[^=]))*(\])?\]=\] :
 	long_string_token(TokenChars, TokenLen, 3, TokenLine).
-\[==\[([^]]|\](==[^]]|=[^=]|[^=]))*\]==\] :
+\[==\[([^]]|\](==[^]]|=[^=]|[^=]))*(\]=|\])?\]==\] :
 	long_string_token(TokenChars, TokenLen, 4, TokenLine).
-\[===\[([^]]|\](===[^]]|==[^=]|=[^=]|[^=]))*\]===\] :
+\[===\[([^]]|\](===[^]]|==[^=]|=[^=]|[^=]))*(\]==|\]=|\])?\]===\] :
 	long_string_token(TokenChars, TokenLen, 5, TokenLine).
+\[====\[([^]]|\](====[^]]|===[^=]|==[^=]|=[^=]|[^=]))*(\]===|\]==|\]=|\])?\]====\] :
+	long_string_token(TokenChars, TokenLen, 6, TokenLine).
 
 %% \[==\[([^]]|\]==[^]]|\]=[^=]|\][^=])*\]==\] :
 
@@ -118,14 +122,19 @@ Rules.
 
 %% Comments, either -- or --[[ ]].
 %%--(\[([^[\n].*|\[\n|[^[\n].*|\n) : skip_token.
+%% Long-comment rules must come before the generic `--[...]` line-comment
+%% patterns below, otherwise a leveled long comment opener is consumed as a
+%% single-line comment and the body is left behind as executable input.
+--\[\[([^]]|\][^]])*\]\] : skip_token.
+--\[=\[([^]]|\](=[^]]|[^=]))*(\])?\]=\] : skip_token.
+--\[==\[([^]]|\](==[^]]|=[^=]|[^=]))*(\]=|\])?\]==\] : skip_token.
+--\[===\[([^]]|\](===[^]]|==[^=]|=[^=]|[^=]))*(\]==|\]=|\])?\]===\] : skip_token.
+--\[====\[([^]]|\](====[^]]|===[^=]|==[^=]|=[^=]|[^=]))*(\]===|\]==|\]=|\])?\]====\] : skip_token.
+--\[\[([^]]|\][^]])* : {error,"unfinished long comment"}.
 --\n :		skip_token.
 --[^[\n].* :	skip_token.
 --\[\n :	skip_token.
 --\[[^[\n].* :	skip_token.
-
-%% Comment --ab ... yz  --ab([^y]|y[^z])*yz
---\[\[([^]]|\][^]])*\]\] : skip_token.
---\[\[([^]]|\][^]])* : {error,"unfinished long comment"}.
 
 %% Catch other illegal tokens.
 
