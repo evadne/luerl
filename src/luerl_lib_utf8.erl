@@ -97,7 +97,7 @@ bin_len(Bin0, Last, N) ->
 %%  invalid byte sequence.
 
 codepoint(_, As, St) ->
-    {Str,I,J} = string_args(As, codepoint, St),
+    {Str,I,J} = codepoint_args(As, St),
     StrLen = byte_size(Str),
     Ret = if I > J -> [];			%Do the same as Lua
 	     true ->
@@ -238,6 +238,30 @@ skip_cont_back(S, P) when P > 0 ->
 	false -> P
     end;
 skip_cont_back(_S, P) -> P.
+
+%% codepoint_args(Args, St) -> {String,I,J}.
+%%  Like string_args but defaults J to I (not byte_size), matching
+%%  Lua 5.3 utf8.codepoint semantics.
+
+codepoint_args(As, St) ->
+    Args = luerl_lib:conv_list(As, [lua_string,lua_integer,lua_integer]),
+    case Args of
+	[A1,A2,A3|_] -> ok;
+	[A1,A2] -> A3 = A2;			%Default j = i
+	[A1] -> A2 = 1, A3 = 1;		%Default i = 1, j = 1
+	error -> A1 = A2 = A3 = ok, badarg_error(codepoint, As, St)
+    end,
+    StrLen = byte_size(A1),
+    Str = A1,
+    I = if A2 > 0, A2 =< StrLen -> A2;
+	   A2 < 0, A2 >= -StrLen -> StrLen + A2 + 1;
+	   true -> lua_error(<<"out of range">>, St)
+	end,
+    J = if A3 > 0, A3 =< StrLen -> A3;
+	   A3 < 0, A3 >= -StrLen -> StrLen + A3 + 1;
+	   true -> lua_error(<<"out of range">>, St)
+	end,
+    {Str,I,J}.
 
 %% string_args(Args, Op, St) -> {String,I,J}.
 %%  Return the string, i and j values from the arguments. Generate a
