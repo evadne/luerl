@@ -66,6 +66,8 @@ encode_codepoints(Is) ->
 %%  and for j is -1. If it finds any invalid byte sequence, returns a
 %%  false value plus the position of the first invalid byte.
 
+utf8_len(_, [S|_], St) when is_binary(S), byte_size(S) =:= 0 ->
+    {[0],St};
 utf8_len(_, As, St) ->
     {Str,I,J} = string_args(As, len, St),
     StrLen = byte_size(Str),
