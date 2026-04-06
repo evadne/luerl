@@ -96,6 +96,8 @@ bin_len(Bin0, Last, N) ->
 %%  for i is 1 and for j is i. It raises an error if it meets any
 %%  invalid byte sequence.
 
+codepoint(_, [S|_], St) when is_binary(S), byte_size(S) =:= 0 ->
+    {[],St};
 codepoint(_, As, St) ->
     {Str,I,J} = codepoint_args(As, St),
     StrLen = byte_size(Str),
