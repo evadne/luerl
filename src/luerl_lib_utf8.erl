@@ -46,9 +46,18 @@ table() ->
 utf8_char(_, As, St) ->
     case luerl_lib:args_to_integers(As) of
 	Is when is_list(Is) ->
-	    Ss = << <<I/utf8>> || I <- Is >>,
-	    {[Ss],St};
+	    case encode_codepoints(Is) of
+		{ok,Ss} -> {[Ss],St};
+		error -> lua_error(<<"value out of range">>, St)
+	    end;
 	error -> badarg_error(char, As, St)
+    end.
+
+encode_codepoints(Is) ->
+    try
+	{ok,<< <<I/utf8>> || I <- Is >>}
+    catch
+	error:badarg -> error
     end.
 
 %% len(...) -> Integer.
