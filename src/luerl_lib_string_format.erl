@@ -46,8 +46,6 @@ format_loop([$%|Fmt0], As0, St0, Acc) ->
     {Format,Fmt1} = collect(Fmt0),
     {Out,As1,St1} = build(Format, As0, St0),
     format_loop(Fmt1, As1, St1, [Out|Acc]);
-format_loop([$\\,C|Fmt], As, St, Acc) ->
-    format_loop(Fmt, As, St, [C|Acc]);
 format_loop([C|Fmt], As, St, Acc) ->
     format_loop(Fmt, As, St, [C|Acc]);
 format_loop([], _, St, Acc) ->                 %Ignore extra arguments
