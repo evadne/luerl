@@ -104,7 +104,8 @@ codepoint(_, As, St) ->
 		  Bin = binary_part(Str, I - 1, StrLen - I + 1),
 		  case bin_codepoint(Bin, StrLen - J, []) of
 		      {ok,Cps} -> Cps;
-		      {error,_} -> badarg_error(codepoint, As, St)
+		      {error,_} ->
+			  lua_error(<<"invalid UTF-8 code">>, St)
 		  end
 	  end,
     {Ret,St}.
@@ -256,10 +257,10 @@ string_args(As, Op, St) ->
     Str = A1,
     I = if A2 > 0, A2 =< StrLen -> A2;
 	   A2 < 0, A2 >= -StrLen -> StrLen + A2 + 1;
-	   true -> badarg_error(Op, As, St)
+	   true -> lua_error(<<"out of range">>, St)
 	end,
     J = if A3 > 0, A3 =< StrLen -> A3;
 	   A3 < 0, A3 >= -StrLen -> StrLen + A3 + 1;
-	   true -> badarg_error(Op, As, St)
+	   true -> lua_error(<<"out of range">>, St)
 	end,
     {Str,I,J}.
