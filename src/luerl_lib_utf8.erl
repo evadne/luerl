@@ -119,9 +119,13 @@ codes(_, As, St) ->
 codes_next([A], St) -> codes_next([A,0], St);
 codes_next([Str,P|_], St) when byte_size(Str) =< P -> {[nil],St};
 codes_next([Str,P|_], St) when is_binary(Str) ->
-    <<_:P/binary,C/utf8,Rest/binary>> = Str,
-    P1 = byte_size(Str) - byte_size(Rest),
-    {[P1,C],St}.
+    case Str of
+	<<_:P/binary,C/utf8,Rest/binary>> ->
+	    P1 = byte_size(Str) - byte_size(Rest),
+	    {[P1,C],St};
+	_ ->
+	    lua_error(<<"invalid UTF-8 code">>, St)
+    end.
 
 %% offset(String, N [, I]) -> Integer | nil.
 %%  Returns the byte position where the encoding of the N-th character
