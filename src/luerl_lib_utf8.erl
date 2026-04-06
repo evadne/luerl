@@ -123,13 +123,105 @@ codes_next([Str,P|_], St) when is_binary(Str) ->
     P1 = byte_size(Str) - byte_size(Rest),
     {[P1,C],St}.
 
-%% offset(String, N, ...) -> Integer.
--spec offset(_, [_], any()) -> no_return().
+%% offset(String, N [, I]) -> Integer | nil.
+%%  Returns the byte position where the encoding of the N-th character
+%%  of S starts, counting from position I. A negative N gets characters
+%%  before position I.
+%%
+%%  Default I: 1 when N >= 0, byte_size(S) + 1 when N < 0.
+%%
+%%  When N == 0: returns the start of the character containing byte I
+%%  (walks backward over continuation bytes).
 
 offset(_, As, St) ->
-    _ = string_args(As, offset, St),
-    %% We don't do anything yet.
-    lua_error({'NYI',offset}, St).
+    case luerl_lib:conv_list(As, [lua_string,lua_integer,lua_integer]) of
+	[S,N,I0|_] ->
+	    do_offset(S, N, I0, St);
+	[S,N] ->
+	    I0 = if N >= 0 -> 1; true -> byte_size(S) + 1 end,
+	    do_offset(S, N, I0, St);
+	_ ->
+	    badarg_error(offset, As, St)
+    end.
+
+do_offset(S, N, I0, St) ->
+    Len = byte_size(S),
+    %% Resolve negative positions.
+    Posi0 = if I0 >= 0 -> I0;
+	       true -> Len + I0 + 1
+	    end,
+    %% Validate: 1 <= Posi0 <= Len + 1.
+    if Posi0 < 1; Posi0 > Len + 1 ->
+	    lua_error(<<"position out of range">>, St);
+       true -> ok
+    end,
+    %% Convert to 0-indexed.
+    Posi = Posi0 - 1,
+    if N =:= 0 ->
+	    %% Find beginning of current byte sequence.
+	    P1 = cont_back(S, Posi),
+	    {[P1 + 1],St};
+       true ->
+	    %% N /= 0: starting position must not be a continuation byte.
+	    case Posi < Len andalso is_cont(S, Posi) of
+		true ->
+		    lua_error(<<"initial position is a continuation byte">>, St);
+		false ->
+		    case offset_n(S, Len, Posi, N) of
+			nil -> {[nil],St};
+			P1 -> {[P1 + 1],St}
+		    end
+	    end
+    end.
+
+%% Walk backward over continuation bytes (0-indexed).
+cont_back(_S, 0) -> 0;
+cont_back(S, P) ->
+    case is_cont(S, P) of
+	true -> cont_back(S, P - 1);
+	false -> P
+    end.
+
+%% Check if byte at 0-indexed position is a continuation byte (10xxxxxx).
+is_cont(S, P) ->
+    <<_:P/binary,B,_/binary>> = S,
+    B band 16#C0 =:= 16#80.
+
+%% offset_n: move N characters from position P (0-indexed).
+offset_n(S, Len, P, N) when N > 0 ->
+    %% N - 1: do not count character at P.
+    offset_fwd(S, Len, P, N - 1);
+offset_n(S, _Len, P, N) when N < 0 ->
+    offset_back(S, P, N).
+
+%% Move forward N characters.
+offset_fwd(_S, _Len, P, 0) -> P;
+offset_fwd(_S, Len, P, _N) when P >= Len -> nil;
+offset_fwd(S, Len, P, N) ->
+    P1 = skip_cont_fwd(S, Len, P + 1),
+    offset_fwd(S, Len, P1, N - 1).
+
+skip_cont_fwd(_S, Len, P) when P >= Len -> P;
+skip_cont_fwd(S, Len, P) ->
+    case is_cont(S, P) of
+	true -> skip_cont_fwd(S, Len, P + 1);
+	false -> P
+    end.
+
+%% Move backward |N| characters.
+offset_back(_S, P, 0) -> P;
+offset_back(_S, P, _N) when P =< 0 -> nil;
+offset_back(S, P, N) ->
+    P1 = skip_cont_back(S, P - 1),
+    offset_back(S, P1, N + 1).
+
+skip_cont_back(_S, 0) -> 0;
+skip_cont_back(S, P) when P > 0 ->
+    case is_cont(S, P) of
+	true -> skip_cont_back(S, P - 1);
+	false -> P
+    end;
+skip_cont_back(_S, P) -> P.
 
 %% string_args(Args, Op, St) -> {String,I,J}.
 %%  Return the string, i and j values from the arguments. Generate a
