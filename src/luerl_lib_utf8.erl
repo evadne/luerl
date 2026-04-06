@@ -253,7 +253,8 @@ codepoint_args(As, St) ->
     end,
     StrLen = byte_size(A1),
     Str = A1,
-    I = if A2 > 0, A2 =< StrLen -> A2;
+    %% Lua 5.3 codepoint: i >= 1 (no upper bound), j <= #s.
+    I = if A2 > 0 -> A2;
 	   A2 < 0, A2 >= -StrLen -> StrLen + A2 + 1;
 	   true -> lua_error(<<"out of range">>, St)
 	end,
@@ -266,6 +267,7 @@ codepoint_args(As, St) ->
 %% string_args(Args, Op, St) -> {String,I,J}.
 %%  Return the string, i and j values from the arguments. Generate a
 %%  badarg error on bad values.
+%%  Lua 5.3 utflen: i may be up to StrLen + 1 (past end), j up to StrLen.
 
 string_args(As, Op, St) ->
     %% Get the args.
@@ -279,7 +281,7 @@ string_args(As, Op, St) ->
     StrLen = byte_size(A1),
     %% Check args and return Str, I, J.
     Str = A1,
-    I = if A2 > 0, A2 =< StrLen -> A2;
+    I = if A2 > 0, A2 =< StrLen + 1 -> A2;
 	   A2 < 0, A2 >= -StrLen -> StrLen + A2 + 1;
 	   true -> lua_error(<<"out of range">>, St)
 	end,
