@@ -128,15 +128,38 @@ codes(_, As, St) ->
 	[Str|_] -> {[#erl_func{code=fun codes_next/2},Str,0],St}
     end.
 
+%% codes_next: Lua for-in iterator for utf8.codes.
+%%  State is the 1-indexed position returned by the previous call (0 initially).
+%%  Subtract 1 to get 0-indexed, then:
+%%  - First call (n < 0): start at byte 0
+%%  - Later calls: skip past current char's continuation bytes to find next
+
 codes_next([A], St) -> codes_next([A,0], St);
-codes_next([Str,P|_], St) when byte_size(Str) =< P -> {[nil],St};
-codes_next([Str,P|_], St) when is_binary(Str) ->
-    case Str of
-	<<_:P/binary,C/utf8,Rest/binary>> ->
-	    P1 = byte_size(Str) - byte_size(Rest),
-	    {[P1,C],St};
-	_ ->
-	    lua_error(<<"invalid UTF-8 code">>, St)
+codes_next([Str,State|_], St) when is_binary(Str) ->
+    Len = byte_size(Str),
+    N = State - 1,
+    P = if N < 0 -> 0;				%First iteration
+	   N < Len -> skip_next(Str, Len, N + 1);
+	   true -> Len
+	end,
+    if P >= Len ->
+	    {[nil],St};
+       true ->
+	    case Str of
+		<<_:P/binary,C/utf8,_/binary>> ->
+		    {[P + 1,C],St};		%Return 1-indexed position
+		_ ->
+		    lua_error(<<"invalid UTF-8 code">>, St)
+	    end
+    end.
+
+%% Skip continuation bytes starting at byte offset P (0-indexed).
+skip_next(_Str, Len, P) when P >= Len -> P;
+skip_next(Str, Len, P) ->
+    <<_:P/binary,B,_/binary>> = Str,
+    case B band 16#C0 =:= 16#80 of
+	true -> skip_next(Str, Len, P + 1);
+	false -> P
     end.
 
 %% offset(String, N [, I]) -> Integer | nil.
